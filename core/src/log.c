@@ -1,8 +1,8 @@
-#include "log.h"
 #include <stdarg.h>
 #include <time.h>
 #include <string.h>
 #include <pthread.h>
+#include "log.h"
 
 static LogLevel current_level = LOG_LEVEL_INFO;
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;

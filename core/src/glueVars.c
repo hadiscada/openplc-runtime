@@ -36,31 +36,29 @@ extern unsigned long long common_ticktime__;
 static IEC_BOOL *(*bool_input_ptr)[8] = NULL;
 static IEC_BOOL *(*bool_output_ptr)[8] = NULL;
 
-/*
 //Bytes
-IEC_BYTE *byte_input[BUFFER_SIZE];
-IEC_BYTE *byte_output[BUFFER_SIZE];
+static IEC_BYTE *byte_input[BUFFER_SIZE]; // TODO corrigir declaracao de todas
+static IEC_BYTE *byte_output[BUFFER_SIZE];
 
 //Analog I/O
-IEC_UINT *int_input[BUFFER_SIZE];
-IEC_UINT *int_output[BUFFER_SIZE];
+static IEC_UINT *int_input[BUFFER_SIZE];
+static IEC_UINT *int_output[BUFFER_SIZE];
 
 //32bit I/O
-IEC_UDINT *dint_input[BUFFER_SIZE];
-IEC_UDINT *dint_output[BUFFER_SIZE];
+static IEC_UDINT *dint_input[BUFFER_SIZE];
+static IEC_UDINT *dint_output[BUFFER_SIZE];
 
 //64bit I/O
-IEC_ULINT *lint_input[BUFFER_SIZE];
-IEC_ULINT *lint_output[BUFFER_SIZE];
+static IEC_ULINT *lint_input[BUFFER_SIZE];
+static IEC_ULINT *lint_output[BUFFER_SIZE];
 
 //Memory
-IEC_UINT *int_memory[BUFFER_SIZE];
-IEC_UDINT *dint_memory[BUFFER_SIZE];
-IEC_ULINT *lint_memory[BUFFER_SIZE];
+static IEC_UINT *int_memory[BUFFER_SIZE];
+static IEC_UDINT *dint_memory[BUFFER_SIZE];
+static IEC_ULINT *lint_memory[BUFFER_SIZE];
 
 //Special Functions
-IEC_ULINT *special_functions[BUFFER_SIZE];
-*/
+static IEC_ULINT *special_functions[BUFFER_SIZE];
 
 
 #define __LOCATED_VAR(type, name, ...) type __##name;
