@@ -5,7 +5,7 @@
 #include <dlfcn.h>
 
 #include "iec_types.h"
-#include "log.h"
+#include "../log.h"
 
 #define BUFFER_SIZE		1024
 

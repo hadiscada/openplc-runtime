@@ -34,7 +34,8 @@ add_compile_options(-Wall -Werror -pedantic -Wextra -fstack-protector-strong
 add_executable(plc_main
 		core/src/plc_main.c
 		core/src/log.c
-        core/src/utils.c
+        core/src/utils/utils.c
+        core/src/image_tables.c
 		core/src/watchdog.c)
 
 target_link_libraries(plc_main plc dl pthread)  # dl needed for dlopen/dlsym
