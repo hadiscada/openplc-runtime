@@ -10,6 +10,9 @@ include_directories(./core/generated ./core/generated/lib)
 # Set debug flags
 set(CMAKE_C_FLAGS_DEBUG "-g")
 
+# Make compiler inline functions
+add_compile_options(-O3)
+
 # Step 1: Compile object files
 add_library(plc_objs OBJECT
     core/generated/Res0.c
@@ -20,7 +23,7 @@ add_library(plc_objs OBJECT
 # Step 2: Create shared library from object files + glueVars.c
 add_library(plc SHARED
     $<TARGET_OBJECTS:plc_objs>
-    core/src/glueVars.c
+    core/generated/glueVars.c
 )
 
 add_compile_options(-Wall -Werror -pedantic -Wextra -fstack-protector-strong
