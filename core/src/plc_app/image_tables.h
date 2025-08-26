@@ -4,6 +4,8 @@
 #include "./lib/iec_types.h"
 
 #define BUFFER_SIZE        1024
+#define libplc_file "libplc.so"
+
 
 //Internal buffers for I/O and memory.
 //Booleans
@@ -37,11 +39,11 @@ extern void (*ext_setBufferPointers)(IEC_BOOL *input_bool[BUFFER_SIZE][8], IEC_B
                               IEC_UDINT *input_dint[BUFFER_SIZE], IEC_UDINT *output_dint[BUFFER_SIZE],
                               IEC_ULINT *input_lint[BUFFER_SIZE], IEC_ULINT *output_lint[BUFFER_SIZE],
                               IEC_UINT *int_memory[BUFFER_SIZE], IEC_UDINT *dint_memory[BUFFER_SIZE], IEC_ULINT *lint_memory[BUFFER_SIZE]);
-void (*ext_config_run__)(unsigned long tick);
-void (*ext_config_init__)(void);
-void (*ext_glueVars)(void);
-void (*ext_updateTime)(void);
+extern void (*ext_config_run__)(unsigned long tick);
+extern void (*ext_config_init__)(void);
+extern void (*ext_glueVars)(void);
+extern void (*ext_updateTime)(void);
 
-void symbols_init(void);
+int symbols_init(void);
 
 #endif // IMAGE_TABLES_H

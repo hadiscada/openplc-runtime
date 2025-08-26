@@ -5,6 +5,7 @@
 #include "log.h"
 #include "utils/utils.h"
 
+
 //Internal buffers for I/O and memory.
 //Booleans
 IEC_BOOL *bool_input[BUFFER_SIZE][8];
@@ -31,17 +32,26 @@ IEC_UINT *int_memory[BUFFER_SIZE];
 IEC_UDINT *dint_memory[BUFFER_SIZE];
 IEC_ULINT *lint_memory[BUFFER_SIZE];
 
-void symbols_init(void){
-        char *error = dlerror();
-    #ifdef __APPLE__
-        void *handle = dlopen("./libplc.dylib", RTLD_LAZY);
-    #else
-        void *handle = dlopen("./libplc.so", RTLD_LAZY);
-    #endif
+void (*ext_setBufferPointers)(IEC_BOOL *input_bool[BUFFER_SIZE][8], IEC_BOOL *output_bool[BUFFER_SIZE][8],
+                              IEC_BYTE *input_byte[BUFFER_SIZE], IEC_BYTE *output_byte[BUFFER_SIZE],
+                              IEC_UINT *input_int[BUFFER_SIZE], IEC_UINT *output_int[BUFFER_SIZE],
+                              IEC_UDINT *input_dint[BUFFER_SIZE], IEC_UDINT *output_dint[BUFFER_SIZE],
+                              IEC_ULINT *input_lint[BUFFER_SIZE], IEC_ULINT *output_lint[BUFFER_SIZE],
+                              IEC_UINT *int_memory[BUFFER_SIZE], IEC_UDINT *dint_memory[BUFFER_SIZE], IEC_ULINT *lint_memory[BUFFER_SIZE]);
+void (*ext_config_run__)(unsigned long tick);
+void (*ext_config_init__)(void);
+void (*ext_glueVars)(void);
+void (*ext_updateTime)(void);
+
+int symbols_init(void){
+    char *error = dlerror();
+
+    // find shared object file
+    void *handle = dlopen(libplc_file, RTLD_LAZY);
     if (!handle)
     {
         log_error("dlopen failed: %s\n", dlerror());
-        exit(1);
+        return -1;
     }
 
     // Clear any existing error
@@ -54,7 +64,7 @@ void symbols_init(void){
     {
         log_error("dlsym function error: %s\n", error);
         dlclose(handle);
-        exit(1);
+        return -1;
     }
 
     *(void **)(&ext_config_init__) = dlsym(handle, "config_init__");
@@ -63,7 +73,7 @@ void symbols_init(void){
     {
         log_error("dlsym function error: %s\n", error);
         dlclose(handle);
-        exit(1);
+        return -1;
     }
 
     *(void **)(&ext_glueVars) = dlsym(handle, "glueVars");
@@ -72,7 +82,7 @@ void symbols_init(void){
     {
         log_error("dlsym function error: %s\n", error);
         dlclose(handle);
-        exit(1);
+        return -1;
     }
 
     *(void **)(&ext_updateTime) = dlsym(handle, "updateTime");
@@ -81,7 +91,7 @@ void symbols_init(void){
     {
         log_error("dlsym function error: %s\n", error);
         dlclose(handle);
-        exit(1);
+        return -1;
     }
 
     *(void **)(&ext_setBufferPointers) = dlsym(handle, "setBufferPointers");
@@ -90,7 +100,7 @@ void symbols_init(void){
     {
         log_error("dlsym function error: %s\n", error);
         dlclose(handle);
-        exit(1);
+        return -1;
     }
 
     *(void **)(&ext_common_ticktime__) = dlsym(handle, "common_ticktime__");
@@ -99,7 +109,7 @@ void symbols_init(void){
     {
         log_error("dlsym function error: %s\n", error);
         dlclose(handle);
-        exit(1);
+        return -1;
     }
 
     // Get pointer to variables in .so
@@ -113,4 +123,14 @@ void symbols_init(void){
         exit(1);
     }
     */
+
+    // Send buffer pointers to .so
+    ext_setBufferPointers(bool_input, bool_output,
+        byte_input, byte_output,
+        int_input, int_output,
+        dint_input, dint_output,
+        lint_input, lint_output,
+        int_memory, dint_memory, lint_memory);
+
+    return 0;
 }

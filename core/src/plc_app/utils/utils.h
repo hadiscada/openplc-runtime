@@ -16,6 +16,6 @@ extern unsigned long tick__;
 void normalize_timespec(struct timespec *ts);
 void sleep_until(struct timespec *ts, long period_ns);
 void timespec_diff(struct timespec *a, struct timespec *b, struct timespec *result);
-void symbols_init(void);
+int symbols_init(void);
 
 #endif // UTILS_H
