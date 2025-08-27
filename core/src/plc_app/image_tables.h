@@ -2,7 +2,7 @@
 #define IMAGE_TABLES_H
 
 #include "./lib/iec_types.h"
-#include "plugin_manager.h"
+#include "plcapp_manager.h"
 
 #define BUFFER_SIZE        1024
 #define libplc_file "./libplc.so"

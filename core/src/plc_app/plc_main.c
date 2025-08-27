@@ -12,7 +12,7 @@
 #include "log.h"
 #include "utils.h"
 #include "image_tables.h"
-#include "plugin_manager.h"
+#include "plcapp_manager.h"
 
 extern void* watchdog_thread(void*);
 atomic_long plc_heartbeat = 0;

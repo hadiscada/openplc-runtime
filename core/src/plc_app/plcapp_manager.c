@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <dlfcn.h>
-#include "plugin_manager.h"
+#include "plcapp_manager.h"
 
 struct PluginManager {
     char *so_path;
