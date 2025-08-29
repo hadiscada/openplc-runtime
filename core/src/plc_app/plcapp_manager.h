@@ -5,19 +5,46 @@
 
 typedef struct PluginManager PluginManager;
 
-// Create a plugin manager for a given .so path
+/**
+ * @brief Create a plugin manager for a given .so path
+ *
+ * @param[in]  so_path  The path to the .so file
+ * @return A pointer to the created PluginManager, or NULL on failure
+ */
 PluginManager *plugin_manager_create(const char *so_path);
 
-// Destroy the plugin manager and unload the library
+/**
+ * @brief Destroy the plugin manager and unload the library
+ *
+ * @param[in]  pm  The plugin manager to destroy
+ */
 void plugin_manager_destroy(PluginManager *pm);
 
-// Ensure the library is loaded
+/**
+ * @brief Ensure the library is loaded
+ *
+ * @param[in]  pm  The plugin manager to load
+ * @return true if the library is loaded, false otherwise
+ */
 bool plugin_manager_load(PluginManager *pm);
 
-// Get a raw symbol (void*), you normally won’t call this directly
+/**
+ * @brief Get a raw symbol (void*), you normally won’t call this directly
+ *
+ * @param[in]  pm  The plugin manager to get the symbol from
+ * @param[in]  symbol_name  The name of the symbol to get
+ * @return A pointer to the symbol, or NULL on failure
+ */
 void *plugin_manager_get_symbol(PluginManager *pm, const char *symbol_name);
 
-// Type-safe function getter
+/**
+ * @brief Type-safe function getter
+ *
+ * @param[in]  pm  The plugin manager to get the function from
+ * @param[in]  type  The type of the function
+ * @param[in]  name  The name of the function
+ * @return A pointer to the function, or NULL on failure
+ */
 #define plugin_manager_get_func(pm, type, name)                                \
   ((type)plugin_manager_get_symbol((pm), (name)))
 

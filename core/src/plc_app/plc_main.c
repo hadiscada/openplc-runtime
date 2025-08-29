@@ -14,7 +14,13 @@
 #include "plcapp_manager.h"
 #include "utils.h"
 
+/**
+ * @brief Watchdog thread function
+ *
+ * @return void*
+ */
 extern void *watchdog_thread(void *);
+
 atomic_long plc_heartbeat = 0;
 volatile sig_atomic_t keep_running = 1;
 time_t start_time, end_time;
@@ -27,6 +33,11 @@ long latency_avg, latency_max, latency_min, latency_total;
 struct timespec cycle_start, cycle_end, cycle_time;
 struct timespec timer_start, timer_end, sleep_latency;
 
+/**
+ * @brief Handle SIGINT signal
+ *
+ * @param sig The signal number
+ */
 void handle_sigint(int sig) {
   (void)sig;
   keep_running = 0;
