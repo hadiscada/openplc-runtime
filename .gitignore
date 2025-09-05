@@ -1,7 +1,12 @@
 # Ignore all files in the build output directory
-/build/
+/build*/
 /core/generated/
-.vscode/
+# .vscode/
+.*/
+venv/
+__pycache__/
+
+install_log.txt
 
 # Ignore all object files and shared libraries
 *.o

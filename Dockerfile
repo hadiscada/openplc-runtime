@@ -1,14 +1,10 @@
 # Dockerfile
 FROM debian:bookworm-slim
 
-# Install gcc, make, and build-essential
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    build-essential \
-    gcc \
-    make \
-    cmake \
-    && rm -rf /var/lib/apt/lists/*
+# COPY install.sh /install.sh
 
-# Default workdir (will be overwritten when mounting host dir)
-WORKDIR /workspace
+COPY . /workdir
+WORKDIR /workdir
+RUN chmod +x install.sh
+RUN chmod +x scripts/*
+RUN ./install.sh docker
