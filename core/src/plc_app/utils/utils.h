@@ -7,7 +7,6 @@
 
 #include "log.h"
 
-// IEC_BOOL *(*ext_bool_output)[8];
 extern unsigned long long *ext_common_ticktime__;
 extern unsigned long tick__;
 
