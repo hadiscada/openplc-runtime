@@ -16,6 +16,7 @@
 #include "watchdog.h"
 
 extern atomic_long plc_heartbeat = 0;
+extern PLCState plc_state;
 volatile sig_atomic_t keep_running = 1;
 time_t start_time, end_time;
 
@@ -38,14 +39,88 @@ void handle_sigint(int sig)
     keep_running = 0;
 }
 
+void *plc_cycle_thread(void *arg) 
+{
+    PluginManager *pm = (PluginManager *)arg;
+
+    // Initialize PLC
+    set_realtime_priority();
+    symbols_init(pm);
+    ext_config_init__();
+    ext_glueVars();
+
+    log_info("Starting main loop");
+    plc_state = PLC_STATE_RUNNING;
+    log_info("PLC State: RUNNING");
+
+    while (plc_state == PLC_STATE_RUNNING)
+    {
+        // Update Watchdog Heartbeat
+        atomic_store(&plc_heartbeat, time(NULL));
+
+        // Get the start time for the running cycle
+        clock_gettime(CLOCK_MONOTONIC, &timer_start);
+        ext_config_run__(tick__++);
+        ext_updateTime();
+
+        // Sleep until the next cycle should start
+        sleep_until(&timer_start, (unsigned long long)*ext_common_ticktime__);
+    }
+
+    return NULL;
+}
+
+int load_plc_program(PluginManager *pm)
+{
+    if (plugin_manager_load(pm)) 
+    {
+        log_info("Loading PLC application");
+        plc_state = PLC_STATE_INIT;
+        log_info("PLC State: INIT");
+
+        pthread_t plc_thread;
+        if (pthread_create(&plc_thread, NULL, plc_cycle_thread, pm) != 0) 
+        {
+            log_error("Failed to create PLC cycle thread");
+            plc_state = PLC_STATE_ERROR;
+            log_info("PLC State: ERROR");
+            return -1;
+        }
+        return 0;
+    } 
+    else 
+    {
+        log_error("Failed to load PLC application");
+        plc_state = PLC_STATE_ERROR;
+        log_info("PLC State: ERROR");
+        return -1;
+    }
+}
+
+
 int main(int argc, char *argv[]) 
 {
-    (void)argc;
-    (void)argv;
     log_set_level(LOG_LEVEL_DEBUG);
+
+    // Initialize watchdog
+    if (watchdog_init() != 0)
+    {
+        log_error("Failed to initialize watchdog");
+        return -1;
+    }
+
     // manager to handle creation and destruction of application code
     PluginManager *pm = plugin_manager_create("./libplc.so");
+    load_plc_program(pm);
 
+    while (keep_running) 
+    {
+        // Handle UNIX socket here in the future
+        sleep(1);
+    }
+}
+
+/*
     // --- Set RT priority before PLC starts ---
     set_realtime_priority();
 
@@ -63,11 +138,35 @@ int main(int argc, char *argv[])
     tzset();
     time(&start_time);
 
-    // Event-driven: only load when a request comes
-    char input[16];
-    // Run PLC loop
+    // Load external program
+    if (plugin_manager_load(pm))
+    {
+        log_info("PLC application loaded at startup");
+        plc_state = PLC_STATE_INIT;
+        log_info("PLC State: INIT");
+    }
+    else
+    {
+        log_error("Failed to load PLC application at startup");
+        plc_state = PLC_STATE_ERROR;
+        log_info("PLC State: ERROR");
+    }
+
+    // Main loop
     while (keep_running) 
     {
+        // PLC Initialization
+        log_debug("Initializing symbols");
+        symbols_init(pm);
+
+        log_debug("Initializing PLC");
+        ext_config_init__();
+        ext_glueVars();
+
+        log_info("Starting main loop");
+
+
+
         printf("Type 'req' to trigger APP import: ");
         if (!fgets(input, sizeof(input), stdin))
         {
@@ -80,8 +179,12 @@ int main(int argc, char *argv[])
             log_info("Initializing app object");
             if (plugin_manager_load(pm)) 
             {
-                pthread_t wd_thread;
-                pthread_create(&wd_thread, NULL, watchdog_thread, NULL);
+                // Initialize watchdog
+                if (watchdog_init() != 0)
+                {
+                    log_error("Failed to initialize watchdog");
+                    return -1;
+                }
 
                 log_debug("Initializing symbols");
                 symbols_init(pm);
@@ -190,3 +293,4 @@ int main(int argc, char *argv[])
     plugin_manager_destroy(pm);
     return 0;
 }
+    */
