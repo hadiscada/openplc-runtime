@@ -18,6 +18,7 @@
 
 extern atomic_long plc_heartbeat = 0;
 extern PLCState plc_state;
+extern plc_timing_stats_t plc_timing_stats;
 volatile sig_atomic_t keep_running = 1;
 struct timespec timer_start;
 
@@ -31,6 +32,37 @@ void handle_sigint(int sig)
 {
     (void)sig;
     keep_running = 0;
+}
+
+void *print_stats_thread(void *arg) 
+{
+    (void)arg;
+    while (keep_running) 
+    {
+        if (bool_output[0][0]) 
+        {
+            log_debug("bool_output[0][0]: %d", *bool_output[0][0]);
+        } 
+        else 
+        {
+            log_debug("bool_output[0][0] is NULL");
+        }
+
+        log_info("Scan Count: %lu", plc_timing_stats.scan_count);
+        log_info("Cycle Time - Min: %lu us, Max: %lu us, Avg: %ld us",
+                 plc_timing_stats.cycle_time_min,
+                 plc_timing_stats.cycle_time_max,
+                 plc_timing_stats.cycle_time_avg);
+        log_info("Cycle Latency - Min: %ld us, Max: %ld us, Avg: %ld us",
+                 plc_timing_stats.cycle_latency_min,
+                 plc_timing_stats.cycle_latency_max,
+                 plc_timing_stats.cycle_latency_avg);
+        log_info("Overruns: %lu", plc_timing_stats.overruns);
+
+        // Print every 100ms
+        usleep(100000);
+    }
+    return NULL;
 }
 
 void *plc_cycle_thread(void *arg) 
@@ -112,6 +144,14 @@ int main(int argc, char *argv[])
     // manager to handle creation and destruction of application code
     PluginManager *pm = plugin_manager_create("./libplc.so");
     load_plc_program(pm);
+
+    // Launch status printing thread
+    pthread_t stats_thread;
+    if (pthread_create(&stats_thread, NULL, print_stats_thread, NULL) != 0) 
+    {
+        log_error("Failed to create stats thread");
+        return -1;
+    }
 
     while (keep_running) 
     {
