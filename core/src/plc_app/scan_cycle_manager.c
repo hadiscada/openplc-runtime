@@ -10,10 +10,10 @@ static uint64_t last_start_us = 0;
 
 plc_timing_stats_t plc_timing_stats = 
 {
-    .scan_time_min = UINT64_MAX,
+    .scan_time_min = INT64_MAX,
     .cycle_latency_min = INT64_MAX,
     .cycle_time_avg = 0,
-    .cycle_time_min = UINT64_MAX,
+    .cycle_time_min = INT64_MAX,
     .cycle_latency_avg = 0,
     .scan_count = 0,
     .overruns = 0
@@ -31,18 +31,18 @@ void scan_cycle_time_start()
 {
     uint64_t now_us = ts_now_us();
 
-    if (expected_start_us == 0)
+    if (plc_timing_stats.scan_count == 0)
     {
         // Ignore full calculations for the first cycle
         expected_start_us = now_us + *ext_common_ticktime__ / 1000; // Convert ns to us
         last_start_us = now_us;
-        plc_timing_stats.scan_count = 0;
+        plc_timing_stats.scan_count++;
 
         return;
     }
 
     // Calculate cycle time
-    uint64_t cycle_time_us = now_us - last_start_us;
+    int64_t cycle_time_us = now_us - last_start_us;
     if (cycle_time_us < plc_timing_stats.cycle_time_min)
     {
         plc_timing_stats.cycle_time_min = cycle_time_us;
@@ -67,15 +67,16 @@ void scan_cycle_time_start()
 
     last_start_us = now_us;
     expected_start_us += *ext_common_ticktime__ / 1000; // Convert ns to us
+
+    plc_timing_stats.scan_count++;
 }
 
 void scan_cycle_time_end() 
 {
     uint64_t now_us = ts_now_us();
-    plc_timing_stats.scan_count++;
 
     // Calculate scan time
-    uint64_t scan_time_us = now_us - last_start_us;
+    int64_t scan_time_us = now_us - last_start_us;
     if (scan_time_us < plc_timing_stats.scan_time_min)
     {
         plc_timing_stats.scan_time_min = scan_time_us;

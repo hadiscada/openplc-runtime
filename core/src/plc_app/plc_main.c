@@ -76,6 +76,8 @@ void *plc_cycle_thread(void *arg)
     plc_state = PLC_STATE_RUNNING;
     log_info("PLC State: RUNNING");
 
+    plc_timing_stats.scan_count = 0;
+
     // Get the start time for the running program
     clock_gettime(CLOCK_MONOTONIC, &timer_start);
 
