@@ -16,7 +16,7 @@
 #include "utils/watchdog.h"
 #include "scan_cycle_manager.h"
 
-extern atomic_long plc_heartbeat = 0;
+extern atomic_long plc_heartbeat;
 extern PLCState plc_state;
 extern plc_timing_stats_t plc_timing_stats;
 volatile sig_atomic_t keep_running = 1;
@@ -130,7 +130,7 @@ int load_plc_program(PluginManager *pm)
 }
 
 
-int main(int argc, char *argv[]) 
+int main() 
 {
     log_set_level(LOG_LEVEL_DEBUG);
 
