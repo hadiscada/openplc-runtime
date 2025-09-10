@@ -181,10 +181,8 @@ bool plc_set_state(PLCState new_state)
 
 void plc_state_manager_cleanup(void)
 {
-    pthread_mutex_lock(&state_mutex);
     if (plc_program) 
     {
         unload_plc_program(plc_program);
     }
-    pthread_mutex_unlock(&state_mutex);
 }
