@@ -65,6 +65,18 @@ void *plc_cycle_thread(void *arg)
 
 int load_plc_program(PluginManager *pm)
 {
+    if (pm == NULL)
+    {
+        log_error("Failed to load PLC Program: PluginManager is NULL");
+
+        pthread_mutex_lock(&state_mutex);
+        plc_state = PLC_STATE_ERROR;
+        pthread_mutex_unlock(&state_mutex);
+        log_info("PLC State: ERROR");
+        
+        return -1;
+    }
+
     if (plugin_manager_load(pm)) 
     {
         log_info("Loading PLC application");
@@ -168,6 +180,15 @@ bool plc_set_state(PLCState new_state)
     // Handle transition to running
     if (new_state == PLC_STATE_RUNNING)
     {
+        if (plc_program == NULL)
+        {
+            plc_program = plugin_manager_create("./libplc.so");
+            if (plc_program == NULL) 
+            {
+                log_error("Failed to create PluginManager");
+                return false;
+            }
+        }
         if (load_plc_program(plc_program) < 0)
         {
             return false;
@@ -182,7 +203,7 @@ bool plc_set_state(PLCState new_state)
             return false;
         }
     }
-    
+
     return true;
 }
 
