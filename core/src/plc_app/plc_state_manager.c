@@ -166,16 +166,23 @@ bool plc_set_state(PLCState new_state)
     pthread_mutex_unlock(&state_mutex);
 
     // Handle transition to running
-    if (new_state == PLC_STATE_RUNNING) 
+    if (new_state == PLC_STATE_RUNNING)
     {
-        load_plc_program(plc_program);
+        if (load_plc_program(plc_program) < 0)
+        {
+            return false;
+        }
     }
 
     // Handle transition to stopped
     else if (new_state == PLC_STATE_STOPPED)
     {
-        unload_plc_program(plc_program);
+        if (unload_plc_program(plc_program) < 0)
+        {
+            return false;
+        }
     }
+    
     return true;
 }
 

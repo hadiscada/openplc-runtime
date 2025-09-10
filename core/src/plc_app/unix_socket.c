@@ -46,18 +46,18 @@ void handle_unix_socket_commands(char *command, char *response, size_t response_
         log_debug("Received STATUS command");
         // TODO: Implement status reporting
 
-        strcpy(response, "STATUS:OK\n");
+        strncpy(response, "STATUS:OK\n", response_size);
     } 
     else if (strcmp(command, "STOP") == 0) 
     {
         log_debug("Received STOP command");
         if (plc_set_state(PLC_STATE_STOPPED) == true) 
         {
-            strcpy(response, "STOP:OK\n");
+            strncpy(response, "STOP:OK\n", response_size);
         } 
         else 
         {
-            strcpy(response, "STOP:ERROR\n");
+            strncpy(response, "STOP:ERROR\n", response_size);
         }
     } 
     else if (strcmp(command, "START") == 0) 
@@ -68,16 +68,17 @@ void handle_unix_socket_commands(char *command, char *response, size_t response_
         {
             if (plc_set_state(PLC_STATE_RUNNING) == true) 
             {
-                strcpy(response, "START:OK\n");
+                strncpy(response, "START:OK\n", response_size);
             } 
             else 
             {
-                strcpy(response, "START:ERROR\n");
+                strncpy(response, "START:ERROR\n", response_size);
             }
         } 
         else 
         {
-            log_info("START:ERROR_NOT_RUNNING\n");
+            strncpy(response, "START:ERROR_ALREADY_RUNNING\n", response_size);
+            log_error("Received START command but PLC is already RUNNING");
         }
     }
     else 
@@ -136,7 +137,11 @@ void *unix_socket_thread(void *arg)
                 handle_unix_socket_commands(command_buffer, response, MAX_RESPONSE_SIZE);
                 if (strlen(response) > 0) 
                 {
-                    write(client_fd, response, strlen(response));
+                    ssize_t bytes_written = write(client_fd, response, strlen(response));
+                    if (bytes_written <= 0)
+                    {
+                        log_error("Error writing on unix socket: %s", strerror(errno));
+                    }
                 }
             }
             else if (bytes_read == 0)
