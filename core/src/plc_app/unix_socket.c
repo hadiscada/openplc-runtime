@@ -6,6 +6,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <stdatomic.h>
+#include <signal.h>
 
 #include "unix_socket.h"
 #include "utils/log.h"
@@ -47,7 +49,7 @@ void handle_unix_socket_commands(char *command)
     else if (strcmp(command, "STOP") == 0) 
     {
         log_debug("Received STOP command");
-        set_plc_state(PLC_STATE_STOPPED);
+        plc_set_state(PLC_STATE_STOPPED);
     } 
     else if (strcmp(command, "START") == 0) 
     {
@@ -55,7 +57,7 @@ void handle_unix_socket_commands(char *command)
         PLCState current_state = plc_get_state();
         if (current_state == PLC_STATE_STOPPED || current_state == PLC_STATE_ERROR) 
         {
-            set_plc_state(PLC_STATE_RUNNING);
+            plc_set_state(PLC_STATE_RUNNING);
         } 
         else 
         {

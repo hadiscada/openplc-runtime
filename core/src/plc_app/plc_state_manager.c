@@ -9,7 +9,6 @@
 
 static PLCState plc_state = PLC_STATE_STOPPED;
 static pthread_mutex_t state_mutex = PTHREAD_MUTEX_INITIALIZER;
-static PluginManager *plc_program = NULL;
 
 struct timespec timer_start;
 pthread_t plc_thread;
