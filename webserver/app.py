@@ -17,7 +17,7 @@ from restapi import (
     register_callback_post,
     restapi_bp,
 )
-from unixserver import AsyncUnixServer, queue
+from unixclient import AsyncUnixClient, queue
 
 app = flask.Flask(__name__)
 app.secret_key = str(os.urandom(16))
@@ -210,11 +210,18 @@ def run_https():
         logger.error("SSL credentials FAIL! %s", e)
 
 
-async def async_unix_socket(command_queue_: queue.Queue):
-    socket_path = "/tmp/control.sock"
-    server = AsyncUnixServer(command_queue_, socket_path)
-    asyncio.create_task(server.process_command_queue())
-    await server.run_server()
+async def async_unix_socket(command_queue: queue.Queue):
+    client = AsyncUnixClient(command_queue)
+    try:
+        await client.connect()
+    except ConnectionRefusedError as e:
+        logger.error("Failed to connect to Unix socket: %s", e)
+        return
+    pong = await client.ping()
+    print("Server replied:", pong)
+
+    # asyncio.create_task(client.process_command_queue())
+    # await client.run_client()
 
 
 def start_asyncio_loop(async_loop):
