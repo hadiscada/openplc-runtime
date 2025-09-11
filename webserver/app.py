@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import sqlite3
@@ -16,6 +17,7 @@ from restapi import (
     register_callback_post,
     restapi_bp,
 )
+from unixserver import AsyncUnixServer, queue
 
 app = flask.Flask(__name__)
 app.secret_key = str(os.urandom(16))
@@ -23,11 +25,7 @@ login_manager = flask_login.LoginManager()
 login_manager.init_app(app)
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(
-    level=logging.DEBUG,  # Minimum level to capture
-    format="[%(levelname)s] %(asctime)s - %(message)s",
-    datefmt="%H:%M:%S",
-)
+command_queue: queue.Queue = queue.Queue()
 
 openplc_runtime = openplc.runtime()
 
@@ -44,8 +42,8 @@ def create_connection(db_file):
     try:
         conn = sqlite3.connect(db_file)
         return conn
-    except Exception as e:
-        print(e)
+    except sqlite3.Error as e:
+        logger.error("Error creating database connection: %s", e)
 
     return None
 
@@ -55,16 +53,18 @@ def restapi_callback_get(argument: str, data: dict) -> dict:
     This is the central callback function that handles the logic
     based on the 'argument' from the URL and 'data' from the request.
     """
-    logger.debug(f"GET | Received argument: {argument}, data: {data}")
+    logger.debug("GET | Received argument: %s, data: %s", argument, data)
 
     if argument == "start-plc":
-        openplc_runtime.start_runtime()
+        # openplc_runtime.start_runtime()
         # configure_runtime()
+        command_queue.put({"action": "start-plc", "data": data})
         return {"status": "runtime started"}
 
     elif argument == "stop-plc":
-        openplc_runtime.stop_runtime()
-        return {"status": "runtime stop"}
+        # openplc_runtime.stop_runtime()
+        command_queue.put({"action": "stop-plc", "data": data})
+        return {"status": "runtime stopped"}
 
     elif argument == "runtime-logs":
         logs = openplc_runtime.logs()
@@ -75,7 +75,7 @@ def restapi_callback_get(argument: str, data: dict) -> dict:
             logs = openplc_runtime.compilation_status()
             _logs = logs
         except Exception as e:
-            logger.error(f"Error retrieving compilation logs: {e}")
+            logger.error("Error retrieving compilation logs: %s", e)
             _logs = str(e)
 
         status = _logs
@@ -91,7 +91,7 @@ def restapi_callback_get(argument: str, data: dict) -> dict:
             _status = "Compiling"
             _error = openplc_runtime.get_compilation_error()
         logger.debug(
-            f"Compilation status: {_status}, logs: {_logs}", extra={"error": _error}
+            "Compilation status: %s, logs: %s", _status, _logs, extra={"error": _error}
         )
 
         return {"status": _status, "logs": _logs, "error": _error}
@@ -107,7 +107,7 @@ def restapi_callback_get(argument: str, data: dict) -> dict:
 
 # file upload POST handler
 def restapi_callback_post(argument: str, data: dict) -> dict:
-    logger.debug(f"POST | Received argument: {argument}, data: {data}")
+    logger.debug("POST | Received argument: %s, data: %s", argument, data)
 
     if argument == "upload-file":
         try:
@@ -123,7 +123,7 @@ def restapi_callback_post(argument: str, data: dict) -> dict:
             try:
                 database = "openplc.db"
                 conn = create_connection(database)
-                logger.info(f"{database} connected")
+                logger.info("%s connected", database)
                 if conn is not None:
                     try:
                         cur = conn.cursor()
@@ -131,14 +131,15 @@ def restapi_callback_post(argument: str, data: dict) -> dict:
                             "SELECT * FROM Programs WHERE Name = 'webserver_program'"
                         )
                         row = cur.fetchone()
+
+                        filename = str(row[3])
+                        st_file.save(f"st_files/{filename}")
+
                         cur.close()
                     except Exception as e:
                         return {"UploadFileFail": e}
             except Exception as e:
                 return {"UploadFileFail": f"Error connecting to the database: {e}"}
-
-            filename = str(row[3])
-            st_file.save(f"st_files/{filename}")
 
         except Exception as e:
             return {"UploadFileFail": e}
@@ -166,9 +167,9 @@ def run_https():
         try:
             db.create_all()
             db.session.commit()
-            print("Database tables created successfully.")
+            logger.info("Database tables created successfully.")
         except Exception as e:
-            print(f"Error creating database tables: {e}")
+            logger.error("Error creating database tables: %s", e)
 
     try:
         # CertGen class is used to generate SSL certificates and verify their validity
@@ -197,19 +198,49 @@ def run_https():
                 ssl_context=context,
             )
         except KeyboardInterrupt as e:
-            print(f"Exiting OpenPLC Webserver...{e}")
+            logger.info("Exiting OpenPLC Webserver...%s", e)
             openplc_runtime.stop_runtime()
         except Exception as e:
-            print(f"An error occurred: {e}")
+            logger.error("An error occurred: %s", e)
             openplc_runtime.stop_runtime()
 
-    # TODO handle file error
     except FileNotFoundError as e:
-        print(f"Could not find SSL credentials! {e}")
+        logger.error("Could not find SSL credentials! %s", e)
     except ssl.SSLError as e:
-        print(f"SSL credentials FAIL! {e}")
+        logger.error("SSL credentials FAIL! %s", e)
+
+
+async def async_unix_socket(command_queue_: queue.Queue):
+    socket_path = "/tmp/control.sock"
+    server = AsyncUnixServer(command_queue_, socket_path)
+    asyncio.create_task(server.process_command_queue())
+    await server.run_server()
+
+
+def start_asyncio_loop(async_loop):
+    # Set the event loop for this new thread
+    asyncio.set_event_loop(async_loop)
+    # Run the loop indefinitely
+    async_loop.run_forever()
 
 
 if __name__ == "__main__":
-    # Running RestAPI in thread
-    threading.Thread(target=run_https).start()
+    threading.Thread(target=run_https, daemon=True).start()
+
+    loop = asyncio.new_event_loop()
+
+    async_thread = threading.Thread(
+        target=start_asyncio_loop, args=(loop,), daemon=True
+    )
+    async_thread.start()
+    future = asyncio.run_coroutine_threadsafe(async_unix_socket(command_queue), loop)
+
+    logger.info("Main thread is running.")
+    try:
+        future.result()
+    except KeyboardInterrupt:
+        logger.error("\nStopping servers...")
+        loop.call_soon_threadsafe(loop.stop)
+        async_thread.join()
+    finally:
+        logger.warning("Program finished.")
