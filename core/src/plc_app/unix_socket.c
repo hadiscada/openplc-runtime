@@ -41,7 +41,12 @@ static ssize_t read_line(int fd, char *buffer, size_t max_length)
 
 void handle_unix_socket_commands(char *command, char *response, size_t response_size)
 {
-    if (strcmp(command, "STATUS") == 0) 
+    if (strcmp(command, "PING") == 0)
+    {
+        log_debug("Received PING command");
+        strncpy(response, "PING:OK\n", response_size);
+    }
+    else if (strcmp(command, "STATUS") == 0) 
     {
         log_debug("Received STATUS command");
         // TODO: Implement status reporting

@@ -101,6 +101,7 @@ def restapi_callback_get(argument: str, data: dict) -> dict:
         return {"current_status": "operational", "details": data}
 
     elif argument == "ping":
+        command_queue.put({"action": "ping", "data": data})
         return {"status": "pong"}
     else:
         return {"error": "Unknown argument"}
@@ -238,13 +239,10 @@ async def async_unix_socket(command_queue: queue.Queue):
 
     # Keep the client alive
     try:
-        while True:
-            await client.process_command_queue()
-            # await asyncio.sleep(0.5)
+        await client.process_command_queue()
     except asyncio.CancelledError:
         await client.close()
         logger.info("Unix client stopped")
-
 
 def start_asyncio_loop(async_loop):
     """Run asyncio loop in its own thread"""

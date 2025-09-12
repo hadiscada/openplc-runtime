@@ -7,6 +7,7 @@ import re
 from typing import Set, Optional
 
 logger = logging.getLogger(__name__)
+queue_lock = asyncio.Lock()
 
 
 class AsyncUnixClient:
@@ -53,19 +54,21 @@ class AsyncUnixClient:
             raise RuntimeError("Writer not connected")
 
         data = msg.encode()
-        # data = message.encode()
-        prefix = struct.pack("!I", len(data))   # 4-byte big-endian length
-        raw = prefix + data
+        # prefix = struct.pack("!I", len(data))   # 4-byte big-endian length
+        # raw = prefix + data
         try:
-            self.writer.write(raw)
+            self.writer.write(data)
 
             await self.writer.drain()
-            logger.info("Sent message: %s", msg)
+            logger.info("Sent message: %s", data)
         except ConnectionResetError as e:
             logger.error("Connection reset by server: %s", e)
             raise
         except BrokenPipeError as e:
             logger.error("Broken pipe when sending message: %s", e)
+            raise
+        except ConnectionResetError as e:
+            logger.error("Connection reset by server: %s", e)
             raise
 
     async def recv_message(self, timeout: float = 0.5) -> Optional[str]:
@@ -95,52 +98,53 @@ class AsyncUnixClient:
         except ConnectionResetError as e:
             logger.error("Connection reset by server: %s", e)
             return None
-        
 
-    async def process_command_queue(self):
+    async def process_command_queue(self, response=None):
         """Process commands from the queue"""
-        while not self.command_queue.empty():
-            logger.info("Processing commands! %s", self.command_queue.qsize())
+        while True:
+            async with queue_lock:
+                while not self.command_queue.empty():
+                    logger.info("Processing commands! %s", self.command_queue.qsize())
 
-            command = self.command_queue.get()
-            logger.info("Processing command: %s", command)
+                    command = self.command_queue.get()
+                    logger.info("Processing command: %s", command)
 
-            if command["action"] == "ping":
-                response = await self.ping()
-                logger.info("Ping response: %s", response)
+                    if command["action"] == "ping":
+                        response = await self.ping()
+                        logger.info("Ping response: %s", response)
 
-            elif command["action"] == "start-plc":
-                response = await self.start_plc()
-                logger.info("Start PLC response: %s", response)
+                    elif command["action"] == "start-plc":
+                        response = await self.start_plc()
+                        logger.info("Start PLC response: %s", response)
 
-            elif command["action"] == "stop-plc":
-                response = await self.stop_plc()
-                logger.info("Stop PLC response: %s", response)
-                
-            # elif command["action"] == "runtime-logs":
-            #     response = await self.runtime_logs()
-            #     logger.info("Runtime logs response: %s", response)
-            # elif command["action"] == "compilation-status":
-            #     response = await self.compilation_status()
-            #     logger.info("Compilation status response: %s", response)
-            # elif command["action"] == "status":
-            #     response = await self.status()
-            #     logger.info("Status response: %s", response)
-            self.command_queue.task_done()
+                    elif command["action"] == "stop-plc":
+                        response = await self.stop_plc()
+                        logger.info("Stop PLC response: %s", response)
+
+                    # elif command["action"] == "runtime-logs":
+                    #     response = await self.runtime_logs()
+                    #     logger.info("Runtime logs response: %s", response)
+                    # elif command["action"] == "compilation-status":
+                    #     response = await self.compilation_status()
+                    #     logger.info("Compilation status response: %s", response)
+                    # elif command["action"] == "status":
+                    #     response = await self.status()
+                    #     logger.info("Status response: %s", response)
+                    self.command_queue.task_done()
 
     async def ping(self):
         """Send PING and wait for PONG"""
-        await self.send_message("\nPING\n")
+        await self.send_message("PING\n")
         return await self.recv_message()
 
     async def start_plc(self):
         """Send START command"""
-        await self.send_message("\nSTART\n")
+        await self.send_message("START\n")
         return await self.recv_message()
     
     async def stop_plc(self):
         """Send STOP command"""
-        await self.send_message("\nSTOP\n")
+        await self.send_message("STOP\n")
         return await self.recv_message()
 
     async def close(self):
