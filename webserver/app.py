@@ -5,6 +5,7 @@ import sqlite3
 import ssl
 import threading
 from pathlib import Path
+from typing import Callable
 
 import flask
 import flask_login
@@ -35,10 +36,8 @@ CERT_FILE = (BASE_DIR / "certOPENPLC.pem").resolve()
 KEY_FILE = (BASE_DIR / "keyOPENPLC.pem").resolve()
 HOSTNAME = "localhost"
 
-""" Create a connection to the database file """
-
-
 def create_connection(db_file):
+    """ Create a connection to the database file """
     try:
         conn = sqlite3.connect(db_file)
         return conn
@@ -48,115 +47,144 @@ def create_connection(db_file):
     return None
 
 
+def handle_start_plc(data: dict) -> dict:
+    command_queue.put({"action": "start-plc", "data": data})
+    return {"status": "runtime started"}
+
+
+def handle_stop_plc(data: dict) -> dict:
+    command_queue.put({"action": "stop-plc", "data": data})
+    return {"status": "runtime stopped"}
+
+
+def handle_runtime_logs(data: dict) -> dict:
+    logs = openplc_runtime.logs()
+    return {"runtime-logs": logs}
+
+
+def handle_compilation_status(data: dict) -> dict:
+    try:
+        logs = openplc_runtime.compilation_status()
+        _logs = logs
+    except Exception as e:
+        logger.error("Error retrieving compilation logs: %s", e)
+        _logs = str(e)
+
+    status = _logs
+    if not isinstance(status, str):
+        _status = "No compilation in progress"
+        _error = ""
+    elif "Compilation finished successfully!" in status:
+        _status = "Success"
+        _error = "No error"
+    elif "Compilation finished with errors!" in status:
+        _status = "Error"
+        _error = openplc_runtime.get_compilation_error()
+    else:
+        _status = "Compiling"
+        _error = openplc_runtime.get_compilation_error()
+    
+    logger.debug(
+        "Compilation status: %s, logs: %s", _status, _logs, extra={"error": _error}
+    )
+
+    return {"status": _status, "logs": _logs, "error": _error}
+
+
+def handle_status(data: dict) -> dict:
+    return {"current_status": "operational", "details": data}
+
+
+def handle_ping(data: dict) -> dict:
+    command_queue.put({"action": "ping", "data": data})
+    return {"status": "pong"}
+
+
+GET_HANDLERS: dict[str, Callable[[dict], dict]] = {
+    "start-plc": handle_start_plc,
+    "stop-plc": handle_stop_plc,
+    "runtime-logs": handle_runtime_logs,
+    "compilation-status": handle_compilation_status,
+    "status": handle_status,
+    "ping": handle_ping,
+}
+
+
 def restapi_callback_get(argument: str, data: dict) -> dict:
     """
-    This is the central callback function that handles the logic
-    based on the 'argument' from the URL and 'data' from the request.
+    Dispatch GET callbacks by argument.
     """
-    global command_queue
     logger.debug("GET | Received argument: %s, data: %s", argument, data)
-
-    if argument == "start-plc":
-        # openplc_runtime.start_runtime()
-        # configure_runtime()
-        command_queue.put({"action": "start-plc", "data": data})
-        return {"status": "runtime started"}
-
-    elif argument == "stop-plc":
-        # openplc_runtime.stop_runtime()
-        command_queue.put({"action": "stop-plc", "data": data})
-        return {"status": "runtime stopped"}
-
-    elif argument == "runtime-logs":
-        logs = openplc_runtime.logs()
-        return {"runtime-logs": logs}
-
-    elif argument == "compilation-status":
-        try:
-            logs = openplc_runtime.compilation_status()
-            _logs = logs
-        except Exception as e:
-            logger.error("Error retrieving compilation logs: %s", e)
-            _logs = str(e)
-
-        status = _logs
-        if status is not str:
-            _status = "No compilation in progress"
-        if "Compilation finished successfully!" in status:
-            _status = "Success"
-            _error = "No error"
-        elif "Compilation finished with errors!" in status:
-            _status = "Error"
-            _error = openplc_runtime.get_compilation_error()
-        else:
-            _status = "Compiling"
-            _error = openplc_runtime.get_compilation_error()
-        logger.debug(
-            "Compilation status: %s, logs: %s", _status, _logs, extra={"error": _error}
-        )
-
-        return {"status": _status, "logs": _logs, "error": _error}
-
-    elif argument == "status":
-        return {"current_status": "operational", "details": data}
-
-    elif argument == "ping":
-        command_queue.put({"action": "ping", "data": data})
-        return {"status": "pong"}
-    else:
-        return {"error": "Unknown argument"}
+    handler = GET_HANDLERS.get(argument)
+    if handler:
+        return handler(data)
+    return {"error": "Unknown argument"}
 
 
-# file upload POST handler
+def handle_upload_file(data: dict) -> dict:
+    filename = None
+
+    # Validate file presence
+    if "file" not in flask.request.files:
+        return {"UploadFileFail": "No file part in the request"}
+    
+    st_file = flask.request.files["file"]
+    
+    if st_file.content_length > 32 * 1024 * 1024:  # 32 MB limit
+        return {"UploadFileFail": "File is too large"}
+
+    # Database operations
+    database = "openplc.db"
+    conn = create_connection(database)
+    if conn is None:
+        return {"UploadFileFail": "Error connecting to the database"}
+    
+    logger.info("%s connected", database)
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM Programs WHERE Name = 'webserver_program'")
+        row = cur.fetchone()
+        
+        if not row or len(row) < 4:
+            return {"UploadFileFail": "Program record not found or invalid"}
+        
+        filename = str(row[3])
+        st_file.save(f"st_files/{filename}")
+        cur.close()
+        
+    except Exception as e:
+        return {"UploadFileFail": f"Database operation failed: {e}"}
+    finally:
+        if conn:
+            conn.close()
+
+    if openplc_runtime.status() == "Compiling":
+        return {"RuntimeStatus": "Compiling"}
+
+    try:
+        openplc_runtime.compile_program(filename)
+        return {"CompilationStatus": "Starting program compilation"}
+    except Exception as e:
+        return {"CompilationStatusFail": f"Compilation failed: {e}"}
+
+
+POST_HANDLERS: dict[str, Callable[[dict], dict]] = {
+    "upload-file": handle_upload_file,
+}
+
+
 def restapi_callback_post(argument: str, data: dict) -> dict:
+    """
+    Dispatch POST callbacks by argument.
+    """
     logger.debug("POST | Received argument: %s, data: %s", argument, data)
-
-    if argument == "upload-file":
-        try:
-            # validate filename
-            if "file" not in flask.request.files:
-                return {"UploadFileFail": "No file part in the request"}
-            st_file = flask.request.files["file"]
-            # validate file size
-            if st_file.content_length > 32 * 1024 * 1024:  # 32 MB limit
-                return {"UploadFileFail": "File is too large"}
-
-            # replace program file on database
-            try:
-                database = "openplc.db"
-                conn = create_connection(database)
-                logger.info("%s connected", database)
-                if conn is not None:
-                    try:
-                        cur = conn.cursor()
-                        cur.execute(
-                            "SELECT * FROM Programs WHERE Name = 'webserver_program'"
-                        )
-                        row = cur.fetchone()
-
-                        filename = str(row[3])
-                        st_file.save(f"st_files/{filename}")
-
-                        cur.close()
-                    except Exception as e:
-                        return {"UploadFileFail": e}
-            except Exception as e:
-                return {"UploadFileFail": f"Error connecting to the database: {e}"}
-
-        except Exception as e:
-            return {"UploadFileFail": e}
-
-        if openplc_runtime.status() == "Compiling":
-            return {"RuntimeStatus": "Compiling"}
-
-        try:
-            openplc_runtime.compile_program(f"{filename}")
-            return {"CompilationStatus": "Starting program compilation"}
-        except Exception as e:
-            return {"CompilationStatusFail": e}
-
-    else:
+    handler = POST_HANDLERS.get(argument)
+    
+    if not handler:
         return {"PostRequestError": "Unknown argument"}
+    
+    return handler(data)
 
 
 def run_https():
