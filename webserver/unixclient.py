@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import queue
+import struct
 import re
 from typing import Set, Optional
 
@@ -47,23 +48,33 @@ class AsyncUnixClient:
             logger.error("Socket file not found: %s", self.socket_path)
             raise
 
-    async def send_message(self, msg: str, length_prefixed=False):
+    async def send_message(self, msg: str):
         if not self.writer:
             raise RuntimeError("Writer not connected")
 
         data = msg.encode()
-        self.writer.write(data)
+        # data = message.encode()
+        prefix = struct.pack("!I", len(data))   # 4-byte big-endian length
+        raw = prefix + data
+        try:
+            self.writer.write(raw)
 
-        await self.writer.drain()
-        logger.info("Sent message: %s", msg)
+            await self.writer.drain()
+            logger.info("Sent message: %s", msg)
+        except ConnectionResetError as e:
+            logger.error("Connection reset by server: %s", e)
+            raise
+        except BrokenPipeError as e:
+            logger.error("Broken pipe when sending message: %s", e)
+            raise
 
-    async def recv_message(self) -> Optional[str]:
+    async def recv_message(self, timeout: float = 0.5) -> Optional[str]:
         """Receive message from the server"""
         if not self.reader:
             raise RuntimeError("Not connected")
 
         try:
-            data = await self.reader.readline()
+            data = await asyncio.wait_for(self.reader.readline(), timeout)
 
             if not data:
                 logger.warning("Connection closed by server")
@@ -75,22 +86,37 @@ class AsyncUnixClient:
         except asyncio.IncompleteReadError:
             logger.warning("Server closed connection unexpectedly")
             return None
+        except asyncio.TimeoutError:
+            logger.warning("Timeout waiting for message")
+            return None
+        except UnicodeDecodeError as e:
+            logger.warning("Received invalid UTF-8 data: %s", e)
+            return None
+        except ConnectionResetError as e:
+            logger.error("Connection reset by server: %s", e)
+            return None
+        
 
     async def process_command_queue(self):
         """Process commands from the queue"""
-        logger.info("Processing commands! %s", self.command_queue.qsize())
         while not self.command_queue.empty():
+            logger.info("Processing commands! %s", self.command_queue.qsize())
+
             command = self.command_queue.get()
             logger.info("Processing command: %s", command)
+
             if command["action"] == "ping":
                 response = await self.ping()
                 logger.info("Ping response: %s", response)
+
             elif command["action"] == "start-plc":
                 response = await self.start_plc()
                 logger.info("Start PLC response: %s", response)
+
             elif command["action"] == "stop-plc":
                 response = await self.stop_plc()
                 logger.info("Stop PLC response: %s", response)
+                
             # elif command["action"] == "runtime-logs":
             #     response = await self.runtime_logs()
             #     logger.info("Runtime logs response: %s", response)
@@ -104,18 +130,18 @@ class AsyncUnixClient:
 
     async def ping(self):
         """Send PING and wait for PONG"""
-        await self.send_message("PING", length_prefixed=False)
-        return await self.recv_message(length_prefixed=False)
+        await self.send_message("\nPING\n")
+        return await self.recv_message()
 
     async def start_plc(self):
         """Send START command"""
-        await self.send_message("START", length_prefixed=False)
-        return await self.recv_message(length_prefixed=False)
+        await self.send_message("\nSTART\n")
+        return await self.recv_message()
     
     async def stop_plc(self):
         """Send STOP command"""
-        await self.send_message("STOP", length_prefixed=False)
-        return await self.recv_message(length_prefixed=False)
+        await self.send_message("\nSTOP\n")
+        return await self.recv_message()
 
     async def close(self):
         """Close connection"""

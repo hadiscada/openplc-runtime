@@ -240,7 +240,7 @@ async def async_unix_socket(command_queue: queue.Queue):
     try:
         while True:
             await client.process_command_queue()
-            await asyncio.sleep(0.1)
+            # await asyncio.sleep(0.5)
     except asyncio.CancelledError:
         await client.close()
         logger.info("Unix client stopped")
@@ -253,24 +253,21 @@ def start_asyncio_loop(async_loop):
 
 
 if __name__ == "__main__":
-    # 1. Start REST API in separate thread
     threading.Thread(target=run_https, daemon=True).start()
 
-    # 2. Create a background asyncio loop for the Unix client
     loop = asyncio.new_event_loop()
     async_thread = threading.Thread(
         target=start_asyncio_loop, args=(loop,), daemon=True
     )
     async_thread.start()
 
-    # 3. Schedule the Unix client coroutine
     future = asyncio.run_coroutine_threadsafe(
         async_unix_socket(command_queue), loop
     )
 
     logger.info("Main thread is running (REST API + Unix client).")
     try:
-        future.result()  # Block until client exits
+        future.result()
     except KeyboardInterrupt:
         logger.error("Stopping services...")
         loop.call_soon_threadsafe(loop.stop)
