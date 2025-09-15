@@ -6,6 +6,7 @@ EXPOSE 8443
 
 COPY . /workdir
 WORKDIR /workdir
+RUN mkdir /var/run/runtime
 RUN chmod +x install.sh
 RUN chmod +x scripts/*
 RUN ./install.sh docker
