@@ -21,6 +21,7 @@
 extern PLCState plc_state;
 volatile sig_atomic_t keep_running = 1;
 extern plc_timing_stats_t plc_timing_stats;
+extern bool print_logs;
 
 void handle_sigint(int sig) 
 {
@@ -65,8 +66,19 @@ void *print_stats_thread(void *arg)
     return NULL;
 }
 
-int main() 
+int main(int argc, char *argv[])
 {
+    // Check for --print-logs argument
+    for (int i = 1; i < argc; i++)
+    {
+        if (strcmp(argv[i], "--print-logs") == 0)
+        {
+            print_logs = true;
+            break;
+        }
+    }
+
+    // Initialize logging system
     log_set_level(LOG_LEVEL_DEBUG);
     
     if (log_init(LOG_SOCKET_PATH) < 0)
