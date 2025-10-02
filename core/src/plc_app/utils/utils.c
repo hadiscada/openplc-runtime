@@ -50,6 +50,6 @@ void set_realtime_priority(void)
     } 
     else 
     {
-        log_info("Scheduler set to SCHED_FIFO, priority %d\n", param.sched_priority);
+        log_info("Scheduler set to SCHED_FIFO, priority %d", param.sched_priority);
     }
 }
