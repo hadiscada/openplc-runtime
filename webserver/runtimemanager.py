@@ -1,3 +1,4 @@
+import json
 import subprocess
 import socket
 import threading
@@ -6,9 +7,10 @@ import os
 import psutil
 from unixserver import UnixLogServer
 from unixclient import SyncUnixClient
-import logging
+from logger import get_logger, LogParser
 
-logger = logging.getLogger(__name__)
+logger, buffer = get_logger(use_buffer=True)
+
 
 class RuntimeManager:
     def __init__(self, runtime_path, plc_socket, log_socket):
@@ -206,9 +208,13 @@ class RuntimeManager:
         """
         Get current logs from the runtime
         """
-        return list(self.log_server.log_buffer)
-    
-    
+        try:
+            _logs = buffer.normalize_buffer_logs(buffer.get_logs())
+            return _logs
+        except AttributeError as e:
+            logger.error("Failed to get logs from buffer: %s", e)
+            return []
+
     def ping(self):
         """
         Send PING and wait for PONG

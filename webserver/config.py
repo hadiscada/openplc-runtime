@@ -1,4 +1,3 @@
-import logging
 import os
 import re
 import secrets
@@ -11,12 +10,7 @@ ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 DB_PATH = Path(__file__).resolve().parent.parent / "restapi.db"
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
-logger = logging.getLogger(__name__)
-logging.basicConfig(
-    level=logging.DEBUG,  # Minimum level to capture
-    format="[%(levelname)s] %(asctime)s - %(message)s",
-    datefmt="%H:%M:%S",
-)
+# logger = logging.getLogger("logger")
 
 
 # Function to validate environment variable values

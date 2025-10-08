@@ -1,10 +1,12 @@
+import json
 import socket
 import threading
-import collections
-import logging
 import os
+from logger import get_logger, LogParser
 
-logger = logging.getLogger(__name__)
+logger, buffer = get_logger(use_buffer=True)
+parser = LogParser(logger)
+
 
 class UnixLogServer:
     def __init__(self, socket_path="/run/runtime/log_runtime.socket"):
@@ -13,7 +15,7 @@ class UnixLogServer:
         self.clients = []
         self.lock = threading.Lock()
         self.running = False
-        self.log_buffer = collections.deque(maxlen=1000)
+        # self.parser = LogParser(logger)
 
     def start(self):
         """Start the Unix socket server"""
@@ -35,8 +37,10 @@ class UnixLogServer:
             self.running = True
             threading.Thread(target=self._accept_clients, daemon=True).start()
             logger.info("Log server started at %s", self.socket_path)
-        except Exception as e:
+        except (OSError, socket.error) as e:
             logger.error("Failed to start server: %s", e)
+        except Exception as e:
+            logger.error("Failed to start server (unexpected): %s", e)
             raise
 
     def _accept_clients(self):
@@ -48,15 +52,20 @@ class UnixLogServer:
                     self.clients.append(client_sock)
                 threading.Thread(target=self._handle_client, args=(client_sock,), daemon=True).start()
                 logger.info("Client connected")
+            except (OSError, socket.error) as e:
+                if self.running:
+                    logger.error("Socket error: %s", e)
             except Exception as e:
                 logger.error("Error accepting client: %s", e)
 
-    def _handle_client(self, client_sock):
+    def _handle_client(self, client_sock: socket.socket):
         """Handle communication with a connected client"""
         try:
             with client_sock.makefile('r') as f:
                 for line in f:
-                    self.log_buffer.append(line.strip())
+                    parser.parse_and_log(line)
+        except (OSError, socket.error) as e:
+            logger.error("Socket error: %s", e)
         except Exception as e:
             logger.error("Error handling client: %s", e)
         finally:
