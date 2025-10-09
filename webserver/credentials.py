@@ -32,7 +32,7 @@ def validate_hostname(hostname: str) -> str:
         raise ValueError(f"Hostname too long: {len(hostname)} characters (max 253)")
 
     hostname_pattern = re.compile(
-        r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.[A-Za-z0-9-]{1,63})*$"
+        r'^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$'
     )
 
     if not hostname_pattern.match(hostname):
