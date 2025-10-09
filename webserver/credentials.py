@@ -41,7 +41,7 @@ def validate_hostname(hostname: str) -> str:
             "Hostname must contain only alphanumeric characters, dots, and hyphens"
         )
 
-    dn_special_chars = set('/=+,<>#;"\\\n\r\t')
+    dn_special_chars = set('/=+,<>#;"*\\\n\r\t')
     if any(char in hostname for char in dn_special_chars):
         raise ValueError(
             f"Hostname contains invalid characters. "
