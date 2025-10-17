@@ -8,7 +8,7 @@ and returns responses through the WebSocket connection.
 
 from flask import request
 from flask_jwt_extended import decode_token
-from flask_socketio import SocketIO, disconnect, emit
+from flask_socketio import SocketIO, emit
 from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
 from logger import get_logger
 
@@ -40,14 +40,25 @@ def init_debug_websocket(app, unix_client_instance):
         ping_interval=25,
     )
 
+    @_socketio.on("connect")
+    def handle_root_connect():
+        """Reject connections to root namespace - must use /api/debug"""
+        logger.warning("Connection attempt to root namespace - rejecting")
+        return False
+
     @_socketio.on("connect", namespace="/api/debug")
-    def handle_connect():
+    def handle_connect(auth):
         """Handle WebSocket connection with JWT authentication"""
         try:
-            token = request.args.get("token")
+            token = None
+            if auth and isinstance(auth, dict):
+                token = auth.get("token")
+
+            if not token:
+                token = request.args.get("token")
+
             if not token:
                 logger.warning("Debug WebSocket connection attempt without token")
-                disconnect()
                 return False
 
             try:
@@ -58,12 +69,10 @@ def init_debug_websocket(app, unix_client_instance):
 
             except (ExpiredSignatureError, InvalidTokenError) as e:
                 logger.warning("Debug WebSocket auth failed: %s", e)
-                disconnect()
                 return False
 
         except Exception as e:
             logger.error("Error during debug WebSocket connection: %s", e)
-            disconnect()
             return False
 
     @_socketio.on("disconnect", namespace="/api/debug")
