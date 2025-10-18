@@ -66,7 +66,7 @@ class SyncUnixClient:
 
                     buffer.extend(chunk)
 
-                    if b"\n" in chunk:
+                    if b"\n" in buffer:
                         break
 
                 if not buffer:
