@@ -3,8 +3,45 @@ import os
 import json
 import traceback
 import re
+import threading
+import time
 from dataclasses import dataclass
-from typing import Optional, Literal
+from typing import Optional, Literal, List, Dict, Any
+
+try:
+    from pymodbus.client import ModbusTcpClient
+    from pymodbus.exceptions import ModbusIOException, ConnectionException
+    from pymodbus.pdu import ExceptionResponse
+except ImportError:
+    print("[MODBUS_MASTER] ⚠ pymodbus library not found. Please install it: pip install pymodbus")
+    # Define dummy classes to allow initial loading without erroring out immediately
+    # but actual Modbus operations will fail.
+    class ModbusTcpClient:
+        def __init__(self, *args, **kwargs):
+            self.connected = False
+        def connect(self):
+            print("[MODBUS_MASTER_DUMMY] ModbusTcpClient.connect() called. pymodbus not installed.")
+            self.connected = False # Simulate connection failure
+            return self.connected
+        def close(self):
+            print("[MODBUS_MASTER_DUMMY] ModbusTcpClient.close() called.")
+            self.connected = False
+        def read_holding_registers(self, *args, **kwargs):
+            raise ConnectionException("pymodbus not installed")
+        def read_input_registers(self, *args, **kwargs):
+            raise ConnectionException("pymodbus not installed")
+        def write_single_register(self, *args, **kwargs):
+            raise ConnectionException("pymodbus not installed")
+        def write_multiple_registers(self, *args, **kwargs):
+            raise ConnectionException("pymodbus not installed")
+        def read_coils(self, *args, **kwargs):
+            raise ConnectionException("pymodbus not installed")
+        def write_single_coil(self, *args, **kwargs):
+            raise ConnectionException("pymodbus not installed")
+    ModbusIOException = Exception
+    ConnectionException = Exception
+    ExceptionResponse = Exception
+
 
 Area = Literal["I", "Q", "M"]
 Size = Literal["X", "B", "W", "D", "L"]
@@ -25,9 +62,10 @@ def parse_iec_address(s: str) -> IECAddress:
     m = ADDR_RE.match(s.strip())
     if not m:
         raise ValueError(f"Endereço IEC inválido: {s!r}")
-    area, size, n1, n2 = m.groups()
-    area = area.upper()            # 'I', 'Q' ou 'M'
-    size = size.upper()            # 'X','B','W','D','L'
+    _area, _size, n1, n2 = m.groups()
+    # Cast to satisfy Literal type, regex ensures these values.
+    area: Area = _area.upper()  # type: ignore 
+    size: Size = _size.upper() # type: ignore
     byte = int(n1)
     bit = int(n2) if n2 is not None else None
 
@@ -76,6 +114,283 @@ from shared.plugin_config_decode.modbus_master_config_model import ModbusMasterC
 runtime_args = None
 modbus_master_config: ModbusMasterConfig = None
 safe_buffer_accessor: SafeBufferAccess = None
+slave_threads: List[threading.Thread] = []
+
+class ModbusSlaveDevice(threading.Thread):
+    def __init__(self, device_config: Any, sba: SafeBufferAccess): # device_config type should be more specific, e.g. ModbusDeviceConfig from pydantic model
+        super().__init__(daemon=True) # Set as daemon thread so it exits when main program exits
+        self.device_config = device_config
+        self.sba = sba
+        self._stop_event = threading.Event()
+        self.client: Optional[ModbusTcpClient] = None
+        self.name = f"ModbusSlave-{device_config.name}-{device_config.host}:{device_config.port}"
+
+    def run(self):
+        print(f"[{self.name}] Thread started.")
+        
+        # Use the correct attributes from ModbusDeviceConfig
+        host = self.device_config.host
+        port = self.device_config.port
+        timeout = self.device_config.timeout_ms / 1000.0 # pymodbus uses seconds
+        cycle_time = self.device_config.cycle_time_ms / 1000.0 # pymodbus uses seconds
+        io_points = self.device_config.io_points
+
+        if not io_points:
+            print(f"[{self.name}] No I/O points defined. Stopping thread.")
+            return
+
+        self.client = ModbusTcpClient(
+            host=host,
+            port=port,
+            timeout=timeout,
+            # retries=3, # Optional: configure retries
+            # retry_on_empty=True # Optional
+        )
+
+        try:
+            if not self.client.connect():
+                print(f"[{self.name}] Failed to connect to {host}:{port}.")
+                return
+            print(f"[{self.name}] Connected to {host}:{port}.")
+
+            while not self._stop_event.is_set():
+                cycle_start_time = time.monotonic()
+
+                for point in io_points:
+                    if self._stop_event.is_set():
+                        break
+                    
+                    try:
+                        iec_addr_str = point.iec_location
+                        fc = point.fc
+                        offset = point.offset
+                        length = point.length
+
+                        if iec_addr_str is None or fc is None:
+                            print(f"[{self.name}] ⚠ Skipping I/O point due to missing iec_location or fc: {point}")
+                            continue
+
+                        iec_addr = parse_iec_address(iec_addr_str)
+
+                        try: # Outer try for general point processing errors
+                            if fc in [1, 2]: # Read Coils (FC1) or Discrete Inputs (FC2)
+                                result = None
+                                modbus_error = True
+                                try: # Inner try for Modbus communication
+                                    if fc == 1:
+                                        result = self.client.read_coils(address=offset, count=length)
+                                    elif fc == 2:
+                                        result = self.client.read_discrete_inputs(address=offset, count=length)
+                                    
+                                    if not result.isError():
+                                        modbus_error = False
+                                        # Now, acquire mutex and write to IEC buffer
+                                        try: # Innermost try for buffer access
+                                            self.sba.acquire_buffer_mutex()
+                                            for i, bit_val in enumerate(result.bits):
+                                                if iec_addr.index_bits is not None and iec_addr.size == "X":
+                                                    if i == 0: 
+                                                        self.sba.set_bool_value_at_index(iec_addr.area, iec_addr.index_bits + i, bit_val)
+                                                elif iec_addr.size != "X" and length == 1:
+                                                    int_val = 1 if bit_val else 0
+                                                    self.sba.set_int_value_at_index(iec_addr.area, iec_addr.index_bytes, int_val, iec_addr.width_bits // 8)
+                                        finally:
+                                            self.sba.release_buffer_mutex()
+                                finally: # For Modbus communication part
+                                    if modbus_error and result:
+                                         print(f"[{self.name}] ✗ Error reading coils/inputs (FC{fc}) at {offset}: {result}")
+                                    elif not result: # Should not happen if client call succeeded
+                                         print(f"[{self.name}] ✗ No result from reading coils/inputs (FC{fc}) at {offset}")
+                                    pass # Ensure finally block is not empty
+
+
+                            elif fc in [3, 4]: # Read Holding Registers (FC3) or Input Registers (FC4)
+                                result = None
+                                modbus_error = True
+                                try: # Inner try for Modbus communication
+                                    if fc == 3:
+                                        result = self.client.read_holding_registers(address=offset, count=length)
+                                    elif fc == 4:
+                                        result = self.client.read_input_registers(address=offset, count=length)
+
+                                    if not result.isError():
+                                        modbus_error = False
+                                        byte_data = bytearray()
+                                        for reg_val in result.registers:
+                                            byte_data.extend(reg_val.to_bytes(2, 'big'))
+                                        
+                                        try: # Innermost try for buffer access
+                                            self.sba.acquire_buffer_mutex()
+                                            if len(byte_data) == (iec_addr.width_bits // 8) * length:
+                                                self.sba.set_byte_array_at_index(iec_addr.area, iec_addr.index_bytes, byte_data)
+                                            elif length == 1 and len(result.registers) == 1:
+                                                self.sba.set_int_value_at_index(iec_addr.area, iec_addr.index_bytes, result.registers[0], iec_addr.width_bits // 8)
+                                            else:
+                                                print(f"[{self.name}] ⚠ Mismatch in register count ({len(result.registers)}) and IEC size/length for {iec_addr_str}. Data not written.")
+                                        finally:
+                                            self.sba.release_buffer_mutex()
+                                finally: # For Modbus communication part
+                                    if modbus_error and result:
+                                        print(f"[{self.name}] ✗ Error reading registers (FC{fc}) at {offset}: {result}")
+                                    elif not result:
+                                         print(f"[{self.name}] ✗ No result from reading registers (FC{fc}) at {offset}")
+
+
+                            elif fc == 5: # Write Single Coil (FC5)
+                                coil_state = None
+                                iec_read_error = True
+                                try: # Inner try for IEC buffer read
+                                    self.sba.acquire_buffer_mutex()
+                                    if iec_addr.size == "X" and iec_addr.index_bits is not None:
+                                        coil_state = self.sba.get_bool_value_at_index(iec_addr.area, iec_addr.index_bits)
+                                        iec_read_error = False
+                                    elif iec_addr.size != "X":
+                                        int_val = self.sba.get_int_value_at_index(iec_addr.area, iec_addr.index_bytes, iec_addr.width_bits // 8)
+                                        coil_state = int_val != 0
+                                        iec_read_error = False
+                                    else:
+                                        print(f"[{self.name}] ⚠ Unsupported IEC type for FC5 (Write Single Coil) for {iec_addr_str}")
+                                        # continue # This continue is now outside the mutex lock
+                                finally:
+                                    self.sba.release_buffer_mutex()
+
+                                if iec_read_error or coil_state is None: # If read failed or type unsupported
+                                    continue # Skip to next point
+
+                                # Now perform Modbus write
+                                result = self.client.write_single_coil(address=offset, value=coil_state)
+                                if result.isError():
+                                    print(f"[{self.name}] ✗ Error writing single coil (FC5) at {offset}: {result}")
+                                else:
+                                    print(f"[{self.name}] ✓ Wrote single coil (FC5) at {offset} to {coil_state}")
+
+                            elif fc == 6: # Write Single Register (FC6)
+                                reg_value = None
+                                iec_read_error = True
+                                try: # Inner try for IEC buffer read
+                                    self.sba.acquire_buffer_mutex()
+                                    reg_value = self.sba.get_int_value_at_index(iec_addr.area, iec_addr.index_bytes, iec_addr.width_bits // 8)
+                                    iec_read_error = False
+                                finally:
+                                    self.sba.release_buffer_mutex()
+                                
+                                if iec_read_error or reg_value is None:
+                                    continue
+
+                                result = self.client.write_single_register(address=offset, value=reg_value)
+                                if result.isError():
+                                    print(f"[{self.name}] ✗ Error writing single register (FC6) at {offset}: {result}")
+                                else:
+                                    print(f"[{self.name}] ✓ Wrote single register (FC6) at {offset} to {reg_value}")
+
+                            elif fc == 15: # Write Multiple Coils (FC15)
+                                coils_to_write = []
+                                iec_read_error = True
+                                read_from_iec = True
+                                if not (iec_addr.size == "X" and iec_addr.index_bits is not None):
+                                    print(f"[{self.name}] ⚠ FC15 (Write Multiple Coils) is typically for IEC X type. Found {iec_addr_str}. Skipping.")
+                                    read_from_iec = False
+                                
+                                if read_from_iec:
+                                    try: # Inner try for IEC buffer read
+                                        self.sba.acquire_buffer_mutex()
+                                        for i in range(length):
+                                            coils_to_write.append(self.sba.get_bool_value_at_index(iec_addr.area, iec_addr.index_bits + i))
+                                        iec_read_error = False
+                                    finally:
+                                        self.sba.release_buffer_mutex()
+                                
+                                if read_from_iec and (iec_read_error or len(coils_to_write) != length):
+                                    print(f"[{self.name}] ⚠ Could not read {length} coil states from IEC for {iec_addr_str}")
+                                    continue
+                                
+                                if not read_from_iec: # If skipped due to type mismatch
+                                    continue
+
+                                result = self.client.write_multiple_coils(address=offset, values=coils_to_write)
+                                if result.isError():
+                                    print(f"[{self.name}] ✗ Error writing multiple coils (FC15) at {offset}: {result}")
+                                else:
+                                    print(f"[{self.name}] ✓ Wrote {length} coils (FC15) at {offset}")
+
+                            elif fc == 16: # Write Multiple Registers (FC16)
+                                bytes_to_write = None
+                                iec_read_error = True
+                                try: # Inner try for IEC buffer read
+                                    self.sba.acquire_buffer_mutex()
+                                    bytes_to_write = self.sba.get_byte_array_at_index(iec_addr.area, iec_addr.index_bytes, length * 2)
+                                    iec_read_error = False
+                                finally:
+                                    self.sba.release_buffer_mutex()
+
+                                if iec_read_error or bytes_to_write is None:
+                                    continue
+                                
+                                registers_to_write = []
+                                for i in range(0, len(bytes_to_write), 2):
+                                    if i + 1 < len(bytes_to_write):
+                                        registers_to_write.append(int.from_bytes(bytes_to_write[i:i+2], 'big'))
+                                    else:
+                                        registers_to_write.append(int.from_bytes(bytes_to_write[i:i+1] + b'\x00', 'big'))
+                                
+                                if len(registers_to_write) == length:
+                                    result = self.client.write_multiple_registers(address=offset, values=registers_to_write)
+                                    if result.isError():
+                                        print(f"[{self.name}] ✗ Error writing multiple registers (FC16) at {offset}: {result}")
+                                    else:
+                                        print(f"[{self.name}] ✓ Wrote {length} registers (FC16) at {offset}")
+                                else:
+                                    print(f"[{self.name}] ⚠ Mismatch in IEC data length for FC16. Expected {length} registers, got {len(registers_to_write)} for {iec_addr_str}")
+                            else:
+                                print(f"[{self.name}] ⚠ Unsupported Function Code (FC{fc}) for I/O point {iec_addr_str}")
+
+                        except ValueError as ve:
+                            print(f"[{self.name}] ✗ ValueError processing I/O point {iec_addr_str}: {ve}")
+                        except ModbusIOException as mioe:
+                            print(f"[{self.name}] ✗ Modbus IO Error for {iec_addr_str} (FC{fc}): {mioe}")
+                        except ConnectionException as ce:
+                            print(f"[{self.name}] ✗ Connection Error for {iec_addr_str} (FC{fc}): {ce}. Attempting to reconnect...")
+                            if self.client:
+                                self.client.close()
+                            if not self.client.connect():
+                                print(f"[{self.name}] Reconnect failed. Stopping thread for {host}:{port}.")
+                                return # Exit thread if reconnect fails
+                            print(f"[{self.name}] Reconnected to {host}:{port}.")
+                        except Exception as e:
+                            print(f"[{self.name}] ✗ Unexpected error processing I/O point {iec_addr_str}: {e}")
+                            traceback.print_exc()
+                    except Exception as general_point_error:
+                        print(f"[{self.name}] ✗ General error processing I/O point: {general_point_error}")
+                        traceback.print_exc()
+                
+                # Calculate remaining time in cycle and sleep
+                cycle_elapsed = time.monotonic() - cycle_start_time
+                sleep_duration = max(0, cycle_time - cycle_elapsed)
+                if sleep_duration > 0:
+                    # Check stop event periodically during sleep for faster shutdown
+                    for _ in range(int(sleep_duration * 10)): # Check every 0.1s
+                        if self._stop_event.is_set():
+                            break
+                        time.sleep(0.1)
+                    if self._stop_event.is_set(): # if woken by stop event
+                         break
+
+
+        except ConnectionException as ce:
+            print(f"[{self.name}] ✗ Initial connection failed to {host}:{port}: {ce}")
+        except Exception as e:
+            print(f"[{self.name}] ✗ Unexpected error in thread: {e}")
+            traceback.print_exc()
+        finally:
+            if self.client and self.client.connected:
+                self.client.close()
+            print(f"[{self.name}] Thread finished and connection closed.")
+
+    def stop(self): # Renamed from join to stop to avoid confusion with threading.Thread.join()
+        print(f"[{self.name}] Stop signal received.")
+        self._stop_event.set()
+        # The thread will exit its loop and close connection in run() method.
+        # No need to join here, stop_loop will handle joining all threads.
 
 def init(args_capsule):
     """
@@ -150,15 +465,17 @@ def init(args_capsule):
             modbus_master_config.validate()
             
             print(f"[MODBUS_MASTER] ✓ Configuration loaded and validated successfully.")
-            print(f"[MODBUS_MASTER]   Plugin Name: {modbus_master_config.name}")
-            print(f"[MODBUS_MASTER]   Protocol: {modbus_master_config.protocol}")
-            print(f"[MODBUS_MASTER]   Target Host: {modbus_master_config.host}")
-            print(f"[MODBUS_MASTER]   Target Port: {modbus_master_config.port}")
-            print(f"[MODBUS_MASTER]   Cycle Time: {modbus_master_config.cycle_time_ms}ms")
-            print(f"[MODBUS_MASTER]   Timeout: {modbus_master_config.timeout_ms}ms")
-            print(f"[MODBUS_MASTER]   Number of I/O Points: {len(modbus_master_config.io_points)}")
-            for i, point in enumerate(modbus_master_config.io_points):
-                print(f"[MODBUS_MASTER]     I/O Point {i+1}: FC={point.fc}, Offset='{point.offset}', IEC_Loc='{point.iec_location}', Len={point.length}")
+            print(f"[MODBUS_MASTER]   Total devices configured: {len(modbus_master_config.devices)}")
+            for i, device in enumerate(modbus_master_config.devices):
+                print(f"[MODBUS_MASTER]   Device {i+1}: '{device.name}'")
+                print(f"[MODBUS_MASTER]     Protocol: {device.protocol}")
+                print(f"[MODBUS_MASTER]     Target Host: {device.host}")
+                print(f"[MODBUS_MASTER]     Target Port: {device.port}")
+                print(f"[MODBUS_MASTER]     Cycle Time: {device.cycle_time_ms}ms")
+                print(f"[MODBUS_MASTER]     Timeout: {device.timeout_ms}ms")
+                print(f"[MODBUS_MASTER]     Number of I/O Points: {len(device.io_points)}")
+                for j, point in enumerate(device.io_points):
+                    print(f"[MODBUS_MASTER]       I/O Point {j+1}: FC={point.fc}, Offset='{point.offset}', IEC_Loc='{point.iec_location}', Len={point.length}")
 
 
         except FileNotFoundError:
@@ -191,29 +508,83 @@ def init(args_capsule):
 
 def start_loop():
     """Start the Modbus Master communication loop."""
-    global runtime_args, modbus_master_config, safe_buffer_accessor
+    global runtime_args, modbus_master_config, safe_buffer_accessor, slave_threads
 
     if runtime_args is None or modbus_master_config is None or safe_buffer_accessor is None:
         print("[MODBUS_MASTER] Error: Plugin not initialized. Call init() first.")
         return False
 
     print("[MODBUS_MASTER] Starting Modbus Master communication loop...")
-    # Placeholder for Modbus Master client logic
-    # - Connect to configured slave(s) (modbus_master_config.host, modbus_master_config.port)
-    # - Loop based on modbus_master_config.cycle_time_ms
-    # - For each io_point in modbus_master_config.io_points:
-    #   - Read/write data via Modbus based on point.fc, point.offset, point.length
-    #   - Use safe_buffer_accessor to map data to/from OpenPLC buffers using point.iec_location
-    print("[MODBUS_MASTER] Modbus Master loop started (placeholder).")
+    
+    # Clear any old slave threads if any (e.g., if start_loop is called multiple times without stop_loop)
+    if slave_threads:
+        print("[MODBUS_MASTER] ⚠ Previous slave threads found. Stopping them before starting new ones.")
+        stop_loop() # This should clear slave_threads and join old threads
+
+    # Use the devices list from the updated configuration model
+    devices_to_connect = modbus_master_config.devices
+    
+    if not devices_to_connect:
+        print("[MODBUS_MASTER] ✗ No Modbus slave devices configured to connect.")
+        return False
+
+    print(f"[MODBUS_MASTER] Found {len(devices_to_connect)} device(s) to connect.")
+    
+    for i, device_config in enumerate(devices_to_connect):
+        try:
+            print(f"[MODBUS_MASTER] Creating thread for device {i+1}: '{device_config.name}' ({device_config.host}:{device_config.port})")
+            slave_device_thread = ModbusSlaveDevice(device_config, safe_buffer_accessor)
+            slave_threads.append(slave_device_thread)
+            slave_device_thread.start()
+            print(f"[MODBUS_MASTER] ✓ Thread started for device '{device_config.name}'")
+        except Exception as e:
+            print(f"[MODBUS_MASTER] ✗ Failed to create or start thread for device '{device_config.name}': {e}")
+            traceback.print_exc()
+            # Optionally, stop any already started threads and return False
+            # For now, we'll try to start as many as possible.
+
+    if not slave_threads:
+        print("[MODBUS_MASTER] ✗ No slave threads were started.")
+        return False
+        
+    print(f"[MODBUS_MASTER] ✓ {len(slave_threads)} Modbus slave communication thread(s) started.")
     return True
 
 def stop_loop():
     """Stop the Modbus Master communication loop."""
+    global slave_threads
     print("[MODBUS_MASTER] Stopping Modbus Master communication loop...")
-    # Placeholder for stopping logic
-    # - Close Modbus connections
-    # - Stop any running threads/tasks
-    print("[MODBUS_MASTER] Modbus Master loop stopped (placeholder).")
+
+    if not slave_threads:
+        print("[MODBUS_MASTER] No active slave threads to stop.")
+        return True
+
+    threads_to_join = []
+    for thread in slave_threads:
+        if isinstance(thread, ModbusSlaveDevice) and thread.is_alive():
+            print(f"[MODBUS_MASTER] Signaling thread {thread.name} to stop.")
+            thread.stop() # This calls ModbusSlaveDevice.stop() which sets the _stop_event
+            threads_to_join.append(thread)
+        elif thread.is_alive():
+            # Fallback for any other type of thread that might be in the list
+            print(f"[MODBUS_MASTER] Attempting to join generic thread: {thread.name}")
+            threads_to_join.append(thread) # Will just try to join it
+
+    # Wait for all threads to finish
+    for thread in threads_to_join:
+        try:
+            # Join with a timeout to prevent indefinite blocking if a thread misbehaves
+            thread.join(timeout=max(5, getattr(thread.device_config, 'timeout_ms', 1000) / 1000.0 + 1)) 
+            if thread.is_alive():
+                print(f"[MODBUS_MASTER] ⚠ Thread {thread.name} did not terminate in time. It might be a daemon thread or stuck.")
+            else:
+                print(f"[MODBUS_MASTER] ✓ Thread {thread.name} joined successfully.")
+        except Exception as e:
+            print(f"[MODBUS_MASTER] ✗ Error joining thread {thread.name}: {e}")
+            traceback.print_exc()
+    
+    slave_threads.clear() # Clear the list after attempting to stop and join all
+    print("[MODBUS_MASTER] All slave threads have been signaled to stop and joined (or timed out). Modbus Master loop stopped.")
     return True
 
 def cleanup():
