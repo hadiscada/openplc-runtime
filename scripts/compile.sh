@@ -58,5 +58,5 @@ g++ $FLAGS -I "$LIB_PATH" -c "$SRC_PATH/c_blocks_code.cpp"  -o "$BUILD_PATH/c_bl
 
 # Link shared library into build/
 echo "[INFO] Compiling shared library..."
-g++ $FLAGS -shared -o "$BUILD_PATH/libplc_new.so" "$BUILD_PATH/Config0.o" \
+g++ $FLAGS -shared -o "$BUILD_PATH/new_libplc.so" "$BUILD_PATH/Config0.o" \
     "$BUILD_PATH/Res0.o" "$BUILD_PATH/debug.o" "$BUILD_PATH/glueVars.o" "$BUILD_PATH/c_blocks_code.o"
