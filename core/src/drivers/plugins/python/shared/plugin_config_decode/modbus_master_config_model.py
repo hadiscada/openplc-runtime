@@ -1,11 +1,66 @@
+import re
 from typing import List, Dict, Any
 import json
+from dataclasses import dataclass
+from typing import Optional, Literal, List, Dict, Any
 
 try:
     from .plugin_config_contact import PluginConfigContract
 except ImportError:
     # Para execução direta
     from plugin_config_contact import PluginConfigContract
+
+Area = Literal["I", "Q", "M"]
+Size = Literal["X", "B", "W", "D", "L"]
+
+ADDR_RE = re.compile(r"^%([IQM])([XBWDL])(\d+)(?:\.(\d+))?$", re.IGNORECASE)
+
+@dataclass
+class IECAddress:
+    area: Area              # 'I' | 'Q' | 'M'
+    size: Size              # 'X' | 'B' | 'W' | 'D' | 'L'
+    byte: int               # byte base (para X é o byte do bit; p/ B/W/D/L é o início)
+    bit: Optional[int]      # só para X
+    index_bits: Optional[int]   # índice linear em bits (só p/ X)
+    index_bytes: int            # índice linear em bytes (offset no buffer)
+    width_bits: int             # 1, 8, 16, 32, 64
+
+def parse_iec_address(s: str) -> IECAddress:
+    m = ADDR_RE.match(s.strip())
+    if not m:
+        raise ValueError(f"Endereço IEC inválido: {s!r}")
+    _area, _size, n1, n2 = m.groups()
+    area: Area = _area.upper()  # type: ignore 
+    size: Size = _size.upper() # type: ignore
+    byte = int(n1)
+    bit = int(n2) if n2 is not None else None
+
+    if size == "X":
+        if bit is None or not (0 <= bit <= 7):
+            raise ValueError("Bit ausente ou fora de 0..7 para endereço do tipo X (bit).")
+        index_bits = byte * 8 + bit
+        index_bytes = byte
+        width_bits = 1
+    elif size == "B":
+        index_bits = None
+        index_bytes = byte
+        width_bits = 8
+    elif size == "W":
+        index_bits = None
+        index_bytes = byte * 2
+        width_bits = 16
+    elif size == "D":
+        index_bits = None
+        index_bytes = byte * 4
+        width_bits = 32
+    elif size == "L":
+        index_bits = None
+        index_bytes = byte * 8
+        width_bits = 64
+    else:
+        raise ValueError(f"Tamanho não suportado: {size}")
+
+    return IECAddress(area, size, byte, bit, index_bits, index_bytes, width_bits)
 
 class ModbusDeviceConfig:
     """
@@ -81,7 +136,7 @@ class ModbusMasterConfig(PluginConfigContract):
     """
     def __init__(self):
         super().__init__() # Call the base class constructor
-        self.config = {} # attributes specific to ModbusMasterConfig can be added here
+        # self.config = {} # attributes specific to ModbusMasterConfig can be added here
         self.devices: List[ModbusDeviceConfig] = []  # List to hold multiple Modbus devices
 
     def import_config_from_file(self, file_path: str):
@@ -139,7 +194,7 @@ class ModbusIoPointConfig:
     def __init__(self, fc: int, offset: str, iec_location: str, length: int):
         self.fc = fc  # Function code
         self.offset = offset  # Modbus register offset
-        self.iec_location = iec_location  # IEC location string
+        self.iec_location: IECAddress = parse_iec_address(iec_location)  # IEC location (as IECAddress)
         self.length = length  # Length of the data
 
     @classmethod
@@ -161,10 +216,15 @@ class ModbusIoPointConfig:
         """
         Converts the ModbusIoPointConfig instance to a dictionary.
         """
+        # Convert IECAddress back to string format for serialization
+        iec_str = f"%{self.iec_location.area}{self.iec_location.size}{self.iec_location.byte}"
+        if self.iec_location.bit is not None:
+            iec_str += f".{self.iec_location.bit}"
+            
         return {
             "fc": self.fc,
             "offset": self.offset,
-            "iec_location": self.iec_location,
+            "iec_location": iec_str,
             "len": self.length
         }
 
