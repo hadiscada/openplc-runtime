@@ -1,9 +1,11 @@
+# logger/bufferhandler.py
 import logging
 from collections import deque
 from typing import List, Optional
 import json
 from datetime import datetime, timezone
 from threading import Lock
+from . import config
 
 
 class BufferHandler(logging.Handler):
@@ -11,17 +13,19 @@ class BufferHandler(logging.Handler):
     Custom logging handler that stores log records in memory (FIFO).
     Logs are formatted using the attached formatter (JSON).
     """
-    _instance = None
-    _lock = Lock()
-
     def __init__(self, capacity: int = 1000):
         super().__init__()
         self.buffer = deque(maxlen=capacity)
+        self.records = []  # Store formatted log records as strings
+        self._lock = Lock()
 
     def emit(self, record: logging.LogRecord) -> None:
         with self._lock:
             try:
-                self.buffer.append(self.format(record))
+                record.log_id = config.LoggerConfig.next_log_id()
+                formatted_record = self.format(record)
+                self.records.append(formatted_record)
+                self.buffer.append(formatted_record)
             except Exception:
                 self.handleError(record)
 
@@ -41,7 +45,6 @@ class BufferHandler(logging.Handler):
         """Retrieve logs from buffer."""
         with self._lock:
             filtered_logs = [json.loads(item) for item in self.buffer]
-            # json_output = json.dumps(filtered_logs, indent=2)
             filtered_logs = self.filter_logs(filtered_logs, level=level, min_id=min_id)
             if count is not None and count < len(filtered_logs):
                 filtered_logs = filtered_logs[-count:]
@@ -86,17 +89,10 @@ class BufferHandler(logging.Handler):
 
         return normalized
 
-    @classmethod
-    def get_instance(cls):
-        """Singleton accessor."""
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = cls()
-        return cls._instance
-
     def clear(self) -> None:
         self.buffer.clear()
+        self.records.clear()
+        config.LoggerConfig.reset_log_id()
 
     def __len__(self):
         return len(self.buffer)
