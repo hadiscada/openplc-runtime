@@ -142,4 +142,4 @@ setup_plugin_venvs
 source "$OPENPLC_DIR/venvs/runtime/bin/activate"
 
 # Start the PLC webserver
-"$OPENPLC_DIR/venvs/runtime/bin/python3" "$OPENPLC_DIR/webserver/app.py"
+"$OPENPLC_DIR/venvs/runtime/bin/python3" -m "webserver.app"
