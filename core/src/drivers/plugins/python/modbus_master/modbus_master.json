@@ -4,9 +4,9 @@
     "protocol": "MODBUS",
     "config": {
       "type": "SLAVE",
-      "host": "172.29.65.104",
+      "host": "127.0.0.1",
       "port": 5024,
-      "cycle_time_ms": 100,
+      "cycle_time_ms": 20,
       "timeout_ms": 1000,
       "io_points": [
         {
