@@ -1,72 +1,118 @@
 # tests/conftest.py
-import importlib
-import time
+# tests/conftest.py
 import pytest
-import asyncio
-import threading
+from unittest.mock import MagicMock
+from types import SimpleNamespace
+from modbus_master_plugin import ModbusSlaveDevice  # adjust import
 
-from unittest.mock import AsyncMock, patch
-
-
-@pytest.fixture(scope="function")
-async def modbus_master_plugin(modbus_server):
-    """Fixture that initializes and cleans up the Modbus master plugin."""
-    # Import plugin module dynamically
-    plugin = importlib.import_module(
-        "core.src.drivers.plugins.python.modbus_master.modbus_master_plugin"
+@pytest.fixture
+def fake_device_config():
+    """Fake device configuration with minimal required fields."""
+    return SimpleNamespace(
+        name="TestDevice",
+        host="127.0.0.1",
+        port=1502,
+        timeout_ms=2000,
+        cycle_time_ms=100,
+        io_points=[]
     )
 
-    config = {"host": "localhost", "port": 5020}
+@pytest.fixture
+def fake_sba():
+    """Fake SafeBufferAccess object with read/write mocks."""
+    sba = MagicMock()
+    # Return success for all read/write calls
+    for prefix in ["bool", "byte", "int", "dint", "lint"]:
+        for direction in ["input", "output", "memory"]:
+            getattr(sba, f"write_{prefix}_{direction}", MagicMock(return_value=(True, "Success")))
+            getattr(sba, f"read_{prefix}_{direction}", MagicMock(return_value=(123, "Success")))
+    sba.acquire_mutex.return_value = (True, "Success")
+    sba.release_mutex.return_value = None
+    return sba
 
-    # Call INIT and START
-    await plugin.INIT(config)
-    await plugin.START()
+@pytest.fixture
+def fake_modbus_client(monkeypatch):
+    """Patch ModbusTcpClient to avoid real network activity."""
+    mock_client = MagicMock()
+    mock_client.connected = True
+    mock_client.connect.return_value = True
+    mock_client.close.return_value = None
+    monkeypatch.setattr("your_module.ModbusTcpClient", lambda *a, **kw: mock_client)
+    return mock_client
 
-    yield plugin  # <-- yield plugin to the test
+@pytest.fixture
+def modbus_slave(fake_device_config, fake_sba):
+    """Fixture returning a ModbusSlaveDevice instance."""
+    return ModbusSlaveDevice(fake_device_config, fake_sba)
 
-    # Cleanup
-    await plugin.STOP()
+# import importlib
+# import time
+# import pytest
+# import asyncio
+# import threading
+
+# from unittest.mock import AsyncMock, patch
 
 
-@pytest.fixture(scope="session")
-def mock_modbus_server():
-    """
-    Mock a Modbus TCP server behavior (no asyncio, no sockets).
-    It responds to read_holding_registers and write_registers calls
-    from the Modbus master client.
-    """
-    class MockModbusServer:
-        def __init__(self):
-            self.holding_registers = [17] * 100
-            self.coils = [False] * 100
-            self.running = True
+# @pytest.fixture(scope="function")
+# async def modbus_master_plugin(modbus_server):
+#     """Fixture that initializes and cleans up the Modbus master plugin."""
+#     # Import plugin module dynamically
+#     plugin = importlib.import_module(
+#         "core.src.drivers.plugins.python.modbus_master.modbus_master_plugin"
+#     )
 
-        def start(self):
-            # Simulate a server running in background (threaded)
-            self.thread = threading.Thread(target=self._run)
-            self.thread.daemon = True
-            self.thread.start()
+#     config = {"host": "localhost", "port": 5020}
 
-        def _run(self):
-            # just simulate that the server is "alive"
-            while self.running:
-                time.sleep(0.1)
+#     # Call INIT and START
+#     await plugin.INIT(config)
+#     await plugin.START()
 
-        def stop(self):
-            self.running = False
-            self.thread.join(timeout=1)
+#     yield plugin  # <-- yield plugin to the test
 
-        def read_holding_registers(self, address, count):
-            return self.holding_registers[address:address+count]
+#     # Cleanup
+#     await plugin.STOP()
 
-        def write_register(self, address, value):
-            self.holding_registers[address] = value
-            return True
 
-    server = MockModbusServer()
-    server.start()
-    yield server
-    server.stop()
+# @pytest.fixture(scope="session")
+# def mock_modbus_server():
+#     """
+#     Mock a Modbus TCP server behavior (no asyncio, no sockets).
+#     It responds to read_holding_registers and write_registers calls
+#     from the Modbus master client.
+#     """
+#     class MockModbusServer:
+#         def __init__(self):
+#             self.holding_registers = [17] * 100
+#             self.coils = [False] * 100
+#             self.running = True
+
+#         def start(self):
+#             # Simulate a server running in background (threaded)
+#             self.thread = threading.Thread(target=self._run)
+#             self.thread.daemon = True
+#             self.thread.start()
+
+#         def _run(self):
+#             # just simulate that the server is "alive"
+#             while self.running:
+#                 time.sleep(0.1)
+
+#         def stop(self):
+#             self.running = False
+#             self.thread.join(timeout=1)
+
+#         def read_holding_registers(self, address, count):
+#             return self.holding_registers[address:address+count]
+
+#         def write_register(self, address, value):
+#             self.holding_registers[address] = value
+#             return True
+
+#     server = MockModbusServer()
+#     server.start()
+#     yield server
+#     server.stop()
 
 # @pytest.fixture
 # def mocked_modbus_client():
