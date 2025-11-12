@@ -23,8 +23,8 @@ def fake_sba():
     # Return only values (no status tuple)
     for prefix in ["bool", "byte", "int", "dint", "lint"]:
         for direction in ["input", "output", "memory"]:
-            getattr(sba, f"write_{prefix}_{direction}", MagicMock(return_value=True))
-            getattr(sba, f"read_{prefix}_{direction}", MagicMock(return_value=123))
+            setattr(sba, f"write_{prefix}_{direction}", MagicMock(return_value=(True, "OK")))
+            setattr(sba, f"read_{prefix}_{direction}", MagicMock(return_value=(123, "OK")))
     sba.acquire_mutex.return_value = True
     sba.release_mutex.return_value = None
     return sba

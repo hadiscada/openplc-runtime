@@ -1,7 +1,7 @@
 # tests/test_modbus_slave_device.py
 import time
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 from core.src.drivers.plugins.python.modbus_master.conftest import fake_sba
 
@@ -41,8 +41,11 @@ def test_update_iec_buffer_from_modbus_data_word(modbus_slave, fake_sba):
     iec_addr = SimpleNamespace(area="Q", size="W", index_bytes=0, bit=None)
     data = [10, 20]
     modbus_slave._update_iec_buffer_from_modbus_data(iec_addr, data, len(data))
-    fake_sba.write_int_output.assert_any_call(0, 10, thread_safe=False)
-    assert fake_sba.write_int_output.call_count == 1
+    print("fake_sba.write_int_output.call_args_list:", fake_sba.write_int_output.call_args_list)
+    assert fake_sba.write_int_output.call_args_list == [
+        call(0, 10, thread_safe=False),
+        call(1, 20, thread_safe=False),
+    ]
 
 def test_read_data_for_modbus_write_boolean(modbus_slave, fake_sba):
     modbus_slave.sba = fake_sba  # <-- Inject here
