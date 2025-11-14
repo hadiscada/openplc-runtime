@@ -199,8 +199,9 @@ def test_modbus_config_error_handling():
     """Test ModbusMasterConfig error handling with invalid files or data."""
     print("\n--- Testing ModbusMasterConfig Error Handling ---")
     
-    config_instance = ModbusMasterConfig(config_path="dummy_path_for_error_tests")
-
+    # config_instance = ModbusMasterConfig(config_path="dummy_path_for_error_tests")
+    config_instance = ModbusMasterConfig()
+    
     # Test with a non-existent file
     try:
         config_instance.import_config_from_file("non_existent_file.json")
