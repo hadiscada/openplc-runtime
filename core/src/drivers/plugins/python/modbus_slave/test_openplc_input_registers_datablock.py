@@ -230,4 +230,3 @@ def test_sba_invalid_returns_zero(runtime_args):
     ):
         db = OpenPLCInputRegistersDataBlock(runtime_args, num_registers=4)
         assert db.getValues(1, 4) == [0, 0, 0, 0]
-ð
