@@ -51,9 +51,9 @@ fi
 # Existing conftest.py with fixtures is preserved; no need to create or overwrite.
 
 echo "🧪 Running pytest on REST API..."
-pytest -vvv
+pytest -vvv tests/pytest # --cov=rest_api --cov-report=term
 
 echo "🧪 Running driver plugin tests..."
-pytest -vvv core/src/drivers/plugins/python/
+pytest -vvv core/src/drivers/plugins/python/ # --cov=modbus_master --cov-report=term
 
 echo "✅ All done!"
