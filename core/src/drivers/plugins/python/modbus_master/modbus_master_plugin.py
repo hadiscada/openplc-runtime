@@ -227,7 +227,7 @@ class ModbusSlaveDevice(threading.Thread):
                 if area == "I":
                     buffer_type_str = "bool_input"
                 elif area == "Q":
-                    buffer_type_str = "bool_output" if is_write_op else "bool_output"
+                    buffer_type_str = "bool_output"
                 elif area == "M":
                     print(f"[{self.name}] ⚠ Memory area 'M' not supported for boolean operations")
                     return None
