@@ -14,12 +14,6 @@ typedef enum
 } PLCState;
 
 /**
- * @brief Initialize the PLC state manager and creates the plugin manager.
- * @return int 0 on success, -1 on failure
- */
-int plc_state_manager_init(void);
-
-/**
  * @brief Get the current PLC state.
  * @return PLCState The current PLC state
  */

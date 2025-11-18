@@ -93,6 +93,9 @@ int main(int argc, char *argv[])
     sa.sa_flags = 0;
     sigaction(SIGINT, &sa, NULL);
 
+    // Make sure PLC starts in STOP state
+    plc_set_state(PLC_STATE_STOPPED);
+
     // Initialize watchdog
     if (watchdog_init() != 0)
     {
@@ -117,13 +120,6 @@ int main(int argc, char *argv[])
         {
             log_error("[PLUGIN]: Failed to load plugin configuration");
         }
-    }
-
-    // Start PLC state manager
-    if (plc_state_manager_init() != 0)
-    {
-        log_error("Failed to initialize PLC state manager");
-        return -1;
     }
 
     // Start UNIX socket server
