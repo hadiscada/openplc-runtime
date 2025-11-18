@@ -240,6 +240,7 @@ def run_https():
             ssl_context=context,
             use_reloader=False,
             log_output=False,
+            allow_unsafe_werkzeug=True,
         )
 
     except FileNotFoundError:
