@@ -2,7 +2,9 @@ name: Build and Publish Multi-Arch Docker Image
 
 on:
   push:
-    branches: ["development"]
+    branches: [ main, development ]
+  pull_request:
+    branches: [ main, development ]
   workflow_dispatch:
 
 jobs:
