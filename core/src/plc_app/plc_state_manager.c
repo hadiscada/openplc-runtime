@@ -154,7 +154,9 @@ int plc_state_manager_init(void)
     {
         log_error("Failed to find libplc file");
         pthread_mutex_unlock(&state_mutex);
-        return -1;
+
+        // No libplc file means no PLC program to load
+        return 0;
     }
 
     plc_program = plugin_manager_create(libplc_path);
