@@ -40,4 +40,3 @@ jobs:
           tags: |
             ghcr.io/autonomy-logic/openplc-runtime:latest
             ghcr.io/autonomy-logic/openplc-runtime:${{ github.sha }}
-            ghcr.io/autonomy-logic/openplc-runtime:${{ github.ref_name }}
