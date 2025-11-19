@@ -1,0 +1,24 @@
+# syntax=docker/dockerfile:1
+
+FROM debian:bookworm-slim
+
+WORKDIR /workdir
+
+# Copy source code
+COPY . .
+
+# Setup runtime directory and permissions
+RUN mkdir -p /var/run/runtime && \
+    chmod +x install.sh scripts/* start_openplc.sh
+
+# Clean any existing build artifacts to ensure clean Docker build
+RUN rm -rf build/ venvs/ .venv/ 2>/dev/null || true
+
+# Run installation script
+RUN ./install.sh
+
+# Expose webserver port
+EXPOSE 8443
+
+# Default execution - Start OpenPLC Runtime
+CMD ["bash", "./start_openplc.sh"]
