@@ -1,6 +1,6 @@
 import pytest
 import threading
-import simple_modbus  # <-- Make sure this import is here
+from core.src.drivers.plugins.python.modbus_slave import simple_modbus
 
 MAX_BITS = 8   # matches OpenPLC bit grouping
 MAX_REGS = 1   # word-aligned registers

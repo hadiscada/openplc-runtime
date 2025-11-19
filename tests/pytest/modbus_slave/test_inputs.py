@@ -1,5 +1,5 @@
 # tests/test_discrete_inputs.py
-import simple_modbus
+from core.src.drivers.plugins.python.modbus_slave import simple_modbus
 
 
 def test_inputs_basic(advanced_sba, runtime_args):  # <-- Fixed: Added runtime_args

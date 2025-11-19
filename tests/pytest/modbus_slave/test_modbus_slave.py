@@ -3,9 +3,11 @@ import time
 from unittest.mock import MagicMock, patch
 import pytest
 
-import simple_modbus
+from core.src.drivers.plugins.python.modbus_slave import simple_modbus
 from pymodbus.datastore import ModbusSparseDataBlock
 
+
+MODULE = "core.src.drivers.plugins.python.modbus_slave.simple_modbus"
 # -----------------------------------------------------------------------
 # Helpers / Fixtures
 # -----------------------------------------------------------------------
@@ -135,7 +137,7 @@ class ObservingSafeBufferAccess:
 
 def test_coils_read_write_and_locking(runtime_args):
     # Patch SafeBufferAccess so blocks use ObservingSafeBufferAccess
-    with patch("simple_modbus.SafeBufferAccess", new=ObservingSafeBufferAccess):
+    with patch(f"{MODULE}.SafeBufferAccess", new=ObservingSafeBufferAccess):
         block = simple_modbus.OpenPLCCoilsDataBlock(runtime_args, num_coils=16)
 
         # initially zero
@@ -156,7 +158,7 @@ def test_coils_read_write_and_locking(runtime_args):
 
 
 def test_coils_invalid_ranges_return_zero(runtime_args):
-    with patch("simple_modbus.SafeBufferAccess", new=ObservingSafeBufferAccess):
+    with patch(f"{MODULE}.SafeBufferAccess", new=ObservingSafeBufferAccess):
         block = simple_modbus.OpenPLCCoilsDataBlock(runtime_args, num_coils=8)
 
         # read beyond range -> zeros expected (your code prints and returns zeros)
@@ -169,7 +171,7 @@ def test_coils_invalid_ranges_return_zero(runtime_args):
 
 
 def test_discrete_inputs_behavior(runtime_args):
-    with patch("simple_modbus.SafeBufferAccess", new=ObservingSafeBufferAccess):
+    with patch(f"{MODULE}.SafeBufferAccess", new=ObservingSafeBufferAccess):
         blk = simple_modbus.OpenPLCDiscreteInputsDataBlock(runtime_args, num_inputs=8)
 
         # simulate external update to runtime_args.bool_input (OpenPLC writes here)
@@ -180,7 +182,7 @@ def test_discrete_inputs_behavior(runtime_args):
 
 
 def test_holding_registers_masking(runtime_args):
-    with patch("simple_modbus.SafeBufferAccess", new=ObservingSafeBufferAccess):
+    with patch(f"{MODULE}.SafeBufferAccess", new=ObservingSafeBufferAccess):
         blk = simple_modbus.OpenPLCHoldingRegistersDataBlock(runtime_args, num_registers=8)
 
         # write value > 16-bit and verify masking to uint16
@@ -190,7 +192,7 @@ def test_holding_registers_masking(runtime_args):
 
 
 def test_input_registers_out_of_range(runtime_args):
-    with patch("simple_modbus.SafeBufferAccess", new=ObservingSafeBufferAccess):
+    with patch(f"{MODULE}.SafeBufferAccess", new=ObservingSafeBufferAccess):
         blk = simple_modbus.OpenPLCInputRegistersDataBlock(runtime_args, num_registers=4)
 
         # read partially inside/partially outside -> out-of-range fields are zero
@@ -233,14 +235,8 @@ def test_concurrent_writes_are_consistent(runtime_args):
 # Verify that blocks do not raise on odd inputs (robustness)
 # -----------------------------------------------------------------------
 def test_robustness_against_bad_inputs(runtime_args):
-    with patch("simple_modbus.SafeBufferAccess", new=ObservingSafeBufferAccess):
+    with patch(f"{MODULE}.SafeBufferAccess", new=ObservingSafeBufferAccess):
         coils = simple_modbus.OpenPLCCoilsDataBlock(runtime_args, num_coils=4)
         # None as values, should not raise
         with pytest.raises(TypeError):
             coils.setValues(1, None)
-
-        # # extremely large request count -> handled gracefully (returns zeros)
-        # vals = coils.getValues(1, 10)
-        # assert isinstance(vals, list)
-        # # at least we expect list elements to be ints
-        # assert all(isinstance(x, int) for x in vals[:10])
