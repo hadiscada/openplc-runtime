@@ -1,15 +1,15 @@
 # OpenPLC Runtime v4
 
-OpenPLC Runtime v4 is a headless industrial automation execution environment that runs Programmable Logic Controller (PLC) programs on standard computing hardware. It is designed to be controlled by the [OpenPLC Editor v4](https://github.com/Autonomy-Logic/openplc-editor) desktop application via a REST API.
+OpenPLC Runtime v4 is a headless industrial Programmable Logic Controller (PLC) runtime that can run IEC 61131-3 programs on standard computing hardware. It is designed to be controlled by the [OpenPLC Editor v4](https://github.com/Autonomy-Logic/openplc-editor) desktop application via a REST API or via the [Autonomy Edge Cloud](https://autonomy-edge.com)
 
-## What is OpenPLC Runtime?
+## OpenPLC Runtime Components
 
-OpenPLC Runtime v4 is a **headless service** with no web browser interface. It consists of two main components:
+OpenPLC Runtime v4 consists of two main components:
 
 1. **REST API Server (Python/Flask)** - HTTPS interface on port 8443 for the OpenPLC Editor to upload programs, monitor compilation, and control execution
 2. **PLC Runtime Core (C/C++)** - Real-time execution engine with deterministic scan cycles
 
-The runtime executes programs created in the OpenPLC Editor, supporting IEC 61131-3 programming languages (Ladder Logic, Structured Text, Function Block Diagram, etc.). All interaction with the runtime happens through the OpenPLC Editor desktop application.
+The runtime executes programs created in the OpenPLC Editor, supporting IEC 61131-3 programming languages (Ladder Logic, Structured Text, Function Block Diagram, etc.).
 
 ## Quick Start
 
@@ -29,9 +29,9 @@ docker run -d \
   ghcr.io/autonomy-logic/openplc-runtime:latest
 ```
 
-The runtime will start and listen on port 8443 for connections from the OpenPLC Editor. **Do not open https://localhost:8443 in a browser** - there is no web interface. Instead, open the OpenPLC Editor desktop application and configure the runtime IP address and credentials to connect.
+The runtime will start and listen on port 8443 for connections from the OpenPLC Editor. **Do not open https://localhost:8443 in a browser** - there is no web interface there as there was on the v3 runtime. Instead, open the OpenPLC Editor desktop application and configure the runtime IP address and credentials to connect.
 
-**Supported Architectures:** amd64, arm64, armv7
+**Prebuilt Binaries:** amd64, arm64, armv7
 
 ### Linux Installation
 
@@ -75,12 +75,11 @@ The runtime compiles uploaded programs into shared libraries and loads them dyna
 
 ## Key Features
 
-- **Headless Service** - Controlled by OpenPLC Editor via REST API (no web browser interface)
+- **Headless Service** - Controlled by OpenPLC Editor via REST API
 - **Real-Time Execution** - Deterministic scan cycles with SCHED_FIFO priority scheduling
-- **REST API** - Internal API for OpenPLC Editor communication on port 8443
 - **WebSocket Debug Interface** - Real-time variable inspection and forcing via Editor
 - **Plugin System** - Extensible I/O drivers for various hardware platforms
-- **Multi-Architecture** - Runs on x86_64, ARM64, and ARM32 platforms
+- **Multi-Architecture** - Prebuilt binaries for x86_64, ARM64, and ARM32 platforms. Can run on virtually anything that can run Linux 
 - **Docker Support** - Official multi-arch container images
 - **Security** - TLS encryption, JWT authentication, comprehensive file upload validation
 
