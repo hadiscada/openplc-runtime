@@ -2,6 +2,7 @@
 #include <Python.h>
 
 #include "../plc_app/image_tables.h"
+#include "../plc_app/utils/log.h"
 #include "plugin_config.h"
 #include "plugin_driver.h"
 #include <stdio.h>
@@ -589,6 +590,12 @@ void *generate_structured_args_with_driver(plugin_type_t type, plugin_driver_t *
     // Initialize buffer size info
     args->buffer_size     = BUFFER_SIZE;
     args->bits_per_buffer = 8;
+
+    // Initialize logging functions
+    args->log_info  = log_info;
+    args->log_debug = log_debug;
+    args->log_warn  = log_warn;
+    args->log_error = log_error;
 
     // printf("[PLUGIN]: Runtime args initialized:\n");
     // printf("[PLUGIN]:   buffer_size = %d\n", args->buffer_size);

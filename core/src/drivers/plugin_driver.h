@@ -23,6 +23,12 @@ typedef void (*plugin_cycle_start_func_t)();
 typedef void (*plugin_cycle_end_func_t)();
 typedef void (*plugin_cleanup_func_t)();
 
+// Logging function pointer types
+typedef void (*plugin_log_info_func_t)(const char *fmt, ...);
+typedef void (*plugin_log_debug_func_t)(const char *fmt, ...);
+typedef void (*plugin_log_warn_func_t)(const char *fmt, ...);
+typedef void (*plugin_log_error_func_t)(const char *fmt, ...);
+
 typedef struct
 {
     void *handle; // Handle to the loaded shared library
@@ -61,6 +67,12 @@ typedef struct
     // Buffer size information
     int buffer_size;
     int bits_per_buffer;
+
+    // Logging functions
+    plugin_log_info_func_t log_info;
+    plugin_log_debug_func_t log_debug;
+    plugin_log_warn_func_t log_warn;
+    plugin_log_error_func_t log_error;
 } plugin_runtime_args_t;
 
 // Plugin instance structure
