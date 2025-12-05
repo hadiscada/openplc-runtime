@@ -44,7 +44,6 @@ void (*ext_setBufferPointers)(
     IEC_UINT *int_memory[BUFFER_SIZE], IEC_UDINT *dint_memory[BUFFER_SIZE],
     IEC_ULINT *lint_memory[BUFFER_SIZE]);
 
-
 // Debug
 void (*ext_set_endianness)(uint8_t value);
 uint16_t (*ext_get_var_count)(void);
@@ -52,8 +51,7 @@ size_t (*ext_get_var_size)(size_t idx);
 void *(*ext_get_var_addr)(size_t idx);
 void (*ext_set_trace)(size_t idx, bool forced, void *val);
 
-
-int symbols_init(PluginManager *pm) 
+int symbols_init(PluginManager *pm)
 {
     // Get pointer to external functions
     *(void **)(&ext_config_run__) =
@@ -62,8 +60,7 @@ int symbols_init(PluginManager *pm)
     *(void **)(&ext_config_init__) =
         plugin_manager_get_func(pm, void (*)(unsigned long), "config_init__");
 
-    *(void **)(&ext_glueVars) =
-        plugin_manager_get_func(pm, void (*)(unsigned long), "glueVars");
+    *(void **)(&ext_glueVars) = plugin_manager_get_func(pm, void (*)(unsigned long), "glueVars");
 
     *(void **)(&ext_updateTime) =
         plugin_manager_get_func(pm, void (*)(unsigned long), "updateTime");
@@ -83,30 +80,382 @@ int symbols_init(PluginManager *pm)
     *(void **)(&ext_get_var_count) =
         plugin_manager_get_func(pm, uint16_t (*)(uint16_t), "get_var_count");
 
-    *(void **)(&ext_get_var_size) =
-        plugin_manager_get_func(pm, size_t (*)(size_t), "get_var_size");
+    *(void **)(&ext_get_var_size) = plugin_manager_get_func(pm, size_t (*)(size_t), "get_var_size");
 
     *(void **)(&ext_get_var_addr) =
         plugin_manager_get_func(pm, void *(*)(unsigned long), "get_var_addr");
 
-    *(void **)(&ext_set_trace) =
-        plugin_manager_get_func(pm, void (*)(unsigned long), "set_trace");
+    *(void **)(&ext_set_trace) = plugin_manager_get_func(pm, void (*)(unsigned long), "set_trace");
 
     // Check if all symbols were loaded successfully
-    if (!ext_config_run__ || !ext_config_init__ || !ext_glueVars ||
-        !ext_updateTime || !ext_setBufferPointers || !ext_common_ticktime__ ||
-        !ext_plc_program_md5 || !ext_set_endianness || !ext_get_var_count || 
-        !ext_get_var_size || !ext_get_var_addr || !ext_set_trace) 
+    if (!ext_config_run__ || !ext_config_init__ || !ext_glueVars || !ext_updateTime ||
+        !ext_setBufferPointers || !ext_common_ticktime__ || !ext_plc_program_md5 ||
+        !ext_set_endianness || !ext_get_var_count || !ext_get_var_size || !ext_get_var_addr ||
+        !ext_set_trace)
     {
         log_error("Failed to load all symbols");
         return -1;
     }
 
     // Send buffer pointers to .so
-    ext_setBufferPointers(bool_input, bool_output, byte_input, byte_output,
-                            int_input, int_output, dint_input, dint_output,
-                            lint_input, lint_output, int_memory, dint_memory,
-                            lint_memory);
+    ext_setBufferPointers(bool_input, bool_output, byte_input, byte_output, int_input, int_output,
+                          dint_input, dint_output, lint_input, lint_output, int_memory, dint_memory,
+                          lint_memory);
 
     return 0;
+}
+
+// Static backing arrays for NULL pointer fill
+// These provide temporary storage for image table entries not used by the PLC program
+static IEC_BOOL temp_bool_input[BUFFER_SIZE][8];
+static IEC_BOOL temp_bool_output[BUFFER_SIZE][8];
+static IEC_BYTE temp_byte_input[BUFFER_SIZE];
+static IEC_BYTE temp_byte_output[BUFFER_SIZE];
+static IEC_UINT temp_int_input[BUFFER_SIZE];
+static IEC_UINT temp_int_output[BUFFER_SIZE];
+static IEC_UDINT temp_dint_input[BUFFER_SIZE];
+static IEC_UDINT temp_dint_output[BUFFER_SIZE];
+static IEC_ULINT temp_lint_input[BUFFER_SIZE];
+static IEC_ULINT temp_lint_output[BUFFER_SIZE];
+static IEC_UINT temp_int_memory[BUFFER_SIZE];
+static IEC_UDINT temp_dint_memory[BUFFER_SIZE];
+static IEC_ULINT temp_lint_memory[BUFFER_SIZE];
+
+// Helper macros for address range checking
+#define IS_IN_TEMP_BOOL_INPUT(p)                                                                   \
+    ((p) >= &temp_bool_input[0][0] && (p) <= &temp_bool_input[BUFFER_SIZE - 1][7])
+
+#define IS_IN_TEMP_BOOL_OUTPUT(p)                                                                  \
+    ((p) >= &temp_bool_output[0][0] && (p) <= &temp_bool_output[BUFFER_SIZE - 1][7])
+
+#define IS_IN_TEMP_BYTE_INPUT(p)                                                                   \
+    ((p) >= &temp_byte_input[0] && (p) <= &temp_byte_input[BUFFER_SIZE - 1])
+
+#define IS_IN_TEMP_BYTE_OUTPUT(p)                                                                  \
+    ((p) >= &temp_byte_output[0] && (p) <= &temp_byte_output[BUFFER_SIZE - 1])
+
+#define IS_IN_TEMP_INT_INPUT(p)                                                                    \
+    ((p) >= &temp_int_input[0] && (p) <= &temp_int_input[BUFFER_SIZE - 1])
+
+#define IS_IN_TEMP_INT_OUTPUT(p)                                                                   \
+    ((p) >= &temp_int_output[0] && (p) <= &temp_int_output[BUFFER_SIZE - 1])
+
+#define IS_IN_TEMP_DINT_INPUT(p)                                                                   \
+    ((p) >= &temp_dint_input[0] && (p) <= &temp_dint_input[BUFFER_SIZE - 1])
+
+#define IS_IN_TEMP_DINT_OUTPUT(p)                                                                  \
+    ((p) >= &temp_dint_output[0] && (p) <= &temp_dint_output[BUFFER_SIZE - 1])
+
+#define IS_IN_TEMP_LINT_INPUT(p)                                                                   \
+    ((p) >= &temp_lint_input[0] && (p) <= &temp_lint_input[BUFFER_SIZE - 1])
+
+#define IS_IN_TEMP_LINT_OUTPUT(p)                                                                  \
+    ((p) >= &temp_lint_output[0] && (p) <= &temp_lint_output[BUFFER_SIZE - 1])
+
+#define IS_IN_TEMP_INT_MEMORY(p)                                                                   \
+    ((p) >= &temp_int_memory[0] && (p) <= &temp_int_memory[BUFFER_SIZE - 1])
+
+#define IS_IN_TEMP_DINT_MEMORY(p)                                                                  \
+    ((p) >= &temp_dint_memory[0] && (p) <= &temp_dint_memory[BUFFER_SIZE - 1])
+
+#define IS_IN_TEMP_LINT_MEMORY(p)                                                                  \
+    ((p) >= &temp_lint_memory[0] && (p) <= &temp_lint_memory[BUFFER_SIZE - 1])
+
+void image_tables_fill_null_pointers(void)
+{
+    int filled_count = 0;
+
+    // Fill boolean input pointers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        for (int b = 0; b < 8; b++)
+        {
+            if (bool_input[i][b] == NULL)
+            {
+                temp_bool_input[i][b] = 0;
+                bool_input[i][b]      = &temp_bool_input[i][b];
+                filled_count++;
+            }
+        }
+    }
+
+    // Fill boolean output pointers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        for (int b = 0; b < 8; b++)
+        {
+            if (bool_output[i][b] == NULL)
+            {
+                temp_bool_output[i][b] = 0;
+                bool_output[i][b]      = &temp_bool_output[i][b];
+                filled_count++;
+            }
+        }
+    }
+
+    // Fill byte input pointers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (byte_input[i] == NULL)
+        {
+            temp_byte_input[i] = 0;
+            byte_input[i]      = &temp_byte_input[i];
+            filled_count++;
+        }
+    }
+
+    // Fill byte output pointers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (byte_output[i] == NULL)
+        {
+            temp_byte_output[i] = 0;
+            byte_output[i]      = &temp_byte_output[i];
+            filled_count++;
+        }
+    }
+
+    // Fill int input pointers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (int_input[i] == NULL)
+        {
+            temp_int_input[i] = 0;
+            int_input[i]      = &temp_int_input[i];
+            filled_count++;
+        }
+    }
+
+    // Fill int output pointers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (int_output[i] == NULL)
+        {
+            temp_int_output[i] = 0;
+            int_output[i]      = &temp_int_output[i];
+            filled_count++;
+        }
+    }
+
+    // Fill dint input pointers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (dint_input[i] == NULL)
+        {
+            temp_dint_input[i] = 0;
+            dint_input[i]      = &temp_dint_input[i];
+            filled_count++;
+        }
+    }
+
+    // Fill dint output pointers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (dint_output[i] == NULL)
+        {
+            temp_dint_output[i] = 0;
+            dint_output[i]      = &temp_dint_output[i];
+            filled_count++;
+        }
+    }
+
+    // Fill lint input pointers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (lint_input[i] == NULL)
+        {
+            temp_lint_input[i] = 0;
+            lint_input[i]      = &temp_lint_input[i];
+            filled_count++;
+        }
+    }
+
+    // Fill lint output pointers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (lint_output[i] == NULL)
+        {
+            temp_lint_output[i] = 0;
+            lint_output[i]      = &temp_lint_output[i];
+            filled_count++;
+        }
+    }
+
+    // Fill int memory pointers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (int_memory[i] == NULL)
+        {
+            temp_int_memory[i] = 0;
+            int_memory[i]      = &temp_int_memory[i];
+            filled_count++;
+        }
+    }
+
+    // Fill dint memory pointers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (dint_memory[i] == NULL)
+        {
+            temp_dint_memory[i] = 0;
+            dint_memory[i]      = &temp_dint_memory[i];
+            filled_count++;
+        }
+    }
+
+    // Fill lint memory pointers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (lint_memory[i] == NULL)
+        {
+            temp_lint_memory[i] = 0;
+            lint_memory[i]      = &temp_lint_memory[i];
+            filled_count++;
+        }
+    }
+
+    log_info("Filled %d NULL pointers in image tables with temporary buffers", filled_count);
+}
+
+void image_tables_clear_null_pointers(void)
+{
+    int cleared_count = 0;
+
+    // Clear boolean input pointers that point to temp buffers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        for (int b = 0; b < 8; b++)
+        {
+            if (bool_input[i][b] != NULL && IS_IN_TEMP_BOOL_INPUT(bool_input[i][b]))
+            {
+                bool_input[i][b] = NULL;
+                cleared_count++;
+            }
+        }
+    }
+
+    // Clear boolean output pointers that point to temp buffers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        for (int b = 0; b < 8; b++)
+        {
+            if (bool_output[i][b] != NULL && IS_IN_TEMP_BOOL_OUTPUT(bool_output[i][b]))
+            {
+                bool_output[i][b] = NULL;
+                cleared_count++;
+            }
+        }
+    }
+
+    // Clear byte input pointers that point to temp buffers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (byte_input[i] != NULL && IS_IN_TEMP_BYTE_INPUT(byte_input[i]))
+        {
+            byte_input[i] = NULL;
+            cleared_count++;
+        }
+    }
+
+    // Clear byte output pointers that point to temp buffers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (byte_output[i] != NULL && IS_IN_TEMP_BYTE_OUTPUT(byte_output[i]))
+        {
+            byte_output[i] = NULL;
+            cleared_count++;
+        }
+    }
+
+    // Clear int input pointers that point to temp buffers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (int_input[i] != NULL && IS_IN_TEMP_INT_INPUT(int_input[i]))
+        {
+            int_input[i] = NULL;
+            cleared_count++;
+        }
+    }
+
+    // Clear int output pointers that point to temp buffers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (int_output[i] != NULL && IS_IN_TEMP_INT_OUTPUT(int_output[i]))
+        {
+            int_output[i] = NULL;
+            cleared_count++;
+        }
+    }
+
+    // Clear dint input pointers that point to temp buffers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (dint_input[i] != NULL && IS_IN_TEMP_DINT_INPUT(dint_input[i]))
+        {
+            dint_input[i] = NULL;
+            cleared_count++;
+        }
+    }
+
+    // Clear dint output pointers that point to temp buffers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (dint_output[i] != NULL && IS_IN_TEMP_DINT_OUTPUT(dint_output[i]))
+        {
+            dint_output[i] = NULL;
+            cleared_count++;
+        }
+    }
+
+    // Clear lint input pointers that point to temp buffers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (lint_input[i] != NULL && IS_IN_TEMP_LINT_INPUT(lint_input[i]))
+        {
+            lint_input[i] = NULL;
+            cleared_count++;
+        }
+    }
+
+    // Clear lint output pointers that point to temp buffers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (lint_output[i] != NULL && IS_IN_TEMP_LINT_OUTPUT(lint_output[i]))
+        {
+            lint_output[i] = NULL;
+            cleared_count++;
+        }
+    }
+
+    // Clear int memory pointers that point to temp buffers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (int_memory[i] != NULL && IS_IN_TEMP_INT_MEMORY(int_memory[i]))
+        {
+            int_memory[i] = NULL;
+            cleared_count++;
+        }
+    }
+
+    // Clear dint memory pointers that point to temp buffers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (dint_memory[i] != NULL && IS_IN_TEMP_DINT_MEMORY(dint_memory[i]))
+        {
+            dint_memory[i] = NULL;
+            cleared_count++;
+        }
+    }
+
+    // Clear lint memory pointers that point to temp buffers
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (lint_memory[i] != NULL && IS_IN_TEMP_LINT_MEMORY(lint_memory[i]))
+        {
+            lint_memory[i] = NULL;
+            cleared_count++;
+        }
+    }
+
+    log_info("Cleared %d temporary pointers from image tables", cleared_count);
 }

@@ -29,6 +29,12 @@ void *plc_cycle_thread(void *arg)
     ext_config_init__();
     ext_glueVars();
 
+    // Fill NULL pointers in image tables with temporary buffers
+    // This ensures plugins can access addresses not used by the PLC program
+    plugin_mutex_take(&plugin_driver->buffer_mutex);
+    image_tables_fill_null_pointers();
+    plugin_mutex_give(&plugin_driver->buffer_mutex);
+
     log_info("Starting main loop");
 
     pthread_mutex_lock(&state_mutex);
@@ -140,6 +146,12 @@ int unload_plc_program(PluginManager *pm)
 
         // Wait for the PLC thread to finish
         pthread_join(plc_thread, NULL);
+
+        // Clear temporary pointers from image tables before unloading
+        // This ensures clean state for the next program load
+        plugin_mutex_take(&plugin_driver->buffer_mutex);
+        image_tables_clear_null_pointers();
+        plugin_mutex_give(&plugin_driver->buffer_mutex);
 
         // Destroy the plugin manager
         plugin_manager_destroy(pm);
