@@ -17,7 +17,7 @@ from pymodbus.pdu import ExceptionResponse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 # Import the correct type definitions
-from shared.python_plugin_types import (
+from shared import (
     PluginRuntimeArgs,
     safe_extract_runtime_args_from_capsule,
     SafeBufferAccess,

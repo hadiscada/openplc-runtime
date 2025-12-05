@@ -19,8 +19,8 @@ MAX_BITS = 8
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 # Import the correct type definitions
-from shared.python_plugin_types import (
-    PluginRuntimeArgs, 
+from shared import (
+    PluginRuntimeArgs,
     safe_extract_runtime_args_from_capsule,
     SafeBufferAccess,
     PluginStructureValidator
