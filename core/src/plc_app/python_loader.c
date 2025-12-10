@@ -29,7 +29,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,51 +39,13 @@
 #include "include/iec_python.h"
 
 // Function pointers for logging - set by python_loader_set_loggers()
-static void (*py_log_info)(const char *fmt, ...)  = NULL;
-static void (*py_log_error)(const char *fmt, ...) = NULL;
+// These are always initialized by symbols_init() before any Python FB code runs
+static void (*py_log_info)(const char *fmt, ...);
+static void (*py_log_error)(const char *fmt, ...);
 
-// Fallback logging to stderr when loggers not set
-static void fallback_log(const char *level, const char *fmt, va_list args)
-{
-    fprintf(stderr, "[%s] ", level);
-    vfprintf(stderr, fmt, args);
-    fprintf(stderr, "\n");
-}
-
-static void py_log_info_fallback(const char *fmt, ...)
-{
-    va_list args;
-    va_start(args, fmt);
-    fallback_log("INFO", fmt, args);
-    va_end(args);
-}
-
-static void py_log_error_fallback(const char *fmt, ...)
-{
-    va_list args;
-    va_start(args, fmt);
-    fallback_log("ERROR", fmt, args);
-    va_end(args);
-}
-
-// Wrapper macros for logging
-#define LOG_INFO(...)                                                                              \
-    do                                                                                             \
-    {                                                                                              \
-        if (py_log_info)                                                                           \
-            py_log_info(__VA_ARGS__);                                                              \
-        else                                                                                       \
-            py_log_info_fallback(__VA_ARGS__);                                                     \
-    } while (0)
-
-#define LOG_ERROR(...)                                                                             \
-    do                                                                                             \
-    {                                                                                              \
-        if (py_log_error)                                                                          \
-            py_log_error(__VA_ARGS__);                                                             \
-        else                                                                                       \
-            py_log_error_fallback(__VA_ARGS__);                                                    \
-    } while (0)
+// Simple wrapper macros for logging
+#define LOG_INFO(...) py_log_info(__VA_ARGS__)
+#define LOG_ERROR(...) py_log_error(__VA_ARGS__)
 
 void python_loader_set_loggers(void (*log_info_func)(const char *, ...),
                                void (*log_error_func)(const char *, ...))
