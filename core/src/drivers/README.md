@@ -91,9 +91,9 @@ void start_loop(void);  // Called when plugin should start operations
 void stop_loop(void);   // Called when plugin should stop operations
 void cleanup(void);     // Called when plugin is being unloaded
 
-// Reserved hooks (symbols loaded but not currently invoked by the runtime)
-void cycle_start(void); // Reserved for future per-cycle start hook
-void cycle_end(void);   // Reserved for future per-cycle end hook
+// Per-cycle hooks (called during each PLC scan cycle, synchronized with PLC execution)
+void cycle_start(void); // Called at start of each scan cycle, before PLC logic
+void cycle_end(void);   // Called at end of each scan cycle, after PLC logic
 ```
 
 **Important: Native Plugin Args Lifetime**
@@ -573,6 +573,14 @@ int plugin_driver_start(plugin_driver_t *driver);
 // Returns 0 on success
 int plugin_driver_stop(plugin_driver_t *driver);
 
+// Call cycle_start for all active native plugins (called at start of each PLC scan cycle)
+// Plugins opt-in by implementing cycle_start(); opt-out by not implementing it
+void plugin_driver_cycle_start(plugin_driver_t *driver);
+
+// Call cycle_end for all active native plugins (called at end of each PLC scan cycle)
+// Plugins opt-in by implementing cycle_end(); opt-out by not implementing it
+void plugin_driver_cycle_end(plugin_driver_t *driver);
+
 // Destroy the plugin driver and free resources (calls 'cleanup' on plugins)
 void plugin_driver_destroy(plugin_driver_t *driver);
 ```
@@ -640,8 +648,40 @@ void plugin_driver_destroy(plugin_driver_t *driver);
 2.  **Plugin Lifecycle Management:**
     *   `init()`: Perform one-time setup (load config, initialize data structures).
     *   `start_loop()`: Start long-running tasks (servers, periodic threads).
-    *   `run_cycle()`: Keep this function lightweight if called frequently by the main OpenPLC loop.
     *   `cleanup()`: Reliably release all resources (stop threads, close connections, free memory).
+
+3.  **Native Plugin Cycle Hooks (Real-Time Synchronization):**
+
+    Native plugins can optionally implement `cycle_start()` and `cycle_end()` functions to synchronize with the PLC scan cycle. These hooks are called during each scan cycle while the buffer mutex is held, allowing direct access to I/O buffers without additional locking.
+
+    *   `cycle_start()`: Called at the beginning of each scan cycle, before PLC logic execution. Use this to read inputs or prepare data for the PLC program.
+    *   `cycle_end()`: Called at the end of each scan cycle, after PLC logic execution. Use this to process outputs or perform post-cycle operations.
+
+    **Opt-in/Opt-out:** Plugins opt-in by implementing these functions. If a plugin does not implement them (NULL pointer), the runtime simply skips calling them for that plugin. This allows plugins to choose between:
+    *   **Synchronous operation**: Implement cycle hooks to run in lockstep with the PLC scan cycle (real-time).
+    *   **Asynchronous operation**: Use `start_loop()` to create separate threads that run independently.
+
+    **Important:** Keep cycle hook implementations as fast as possible since they run in the critical path of the PLC scan cycle. Long-running operations will increase scan cycle time and may cause timing issues.
+
+    ```c
+    // Example: Native plugin with cycle hooks
+    static plugin_runtime_args_t g_args;
+
+    int init(void *args) {
+        memcpy(&g_args, args, sizeof(plugin_runtime_args_t));
+        return 0;
+    }
+
+    void cycle_start(void) {
+        // Read inputs before PLC logic runs
+        // Buffer mutex is already held - safe to access buffers directly
+    }
+
+    void cycle_end(void) {
+        // Process outputs after PLC logic runs
+        // Buffer mutex is still held - safe to access buffers directly
+    }
+    ```
 
 3.  **Memory Management (Python):**
     *   Python's garbage collector handles memory. However, explicitly close files, sockets, or release other external resources in `cleanup()`.

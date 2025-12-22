@@ -106,6 +106,12 @@ void plugin_driver_destroy(plugin_driver_t *driver);
 int plugin_mutex_take(pthread_mutex_t *mutex);
 int plugin_mutex_give(pthread_mutex_t *mutex);
 
+// Cycle hook functions for native plugins (called during PLC scan cycle)
+// These iterate through all active native plugins and call their cycle hooks
+// Plugins opt-in by implementing cycle_start/cycle_end; opt-out by not implementing them
+void plugin_driver_cycle_start(plugin_driver_t *driver);
+void plugin_driver_cycle_end(plugin_driver_t *driver);
+
 // Python plugin functions
 int python_plugin_get_symbols(plugin_instance_t *plugin);
 

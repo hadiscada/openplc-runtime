@@ -345,7 +345,7 @@ int plugin_driver_start(plugin_driver_t *driver)
             {
                 // Acquire GIL for this specific Python call
                 PyGILState_STATE local_gil = PyGILState_Ensure();
-                PyObject *res = PyObject_CallNoArgs(plugin->python_plugin->pFuncStart);
+                PyObject *res              = PyObject_CallNoArgs(plugin->python_plugin->pFuncStart);
                 if (!res)
                 {
                     PyErr_Print();
@@ -561,7 +561,6 @@ void plugin_driver_destroy(plugin_driver_t *driver)
             plugin->native_plugin = NULL;
         }
     }
-
 
     PyGILState_Release(local_gstate);
     PyEval_RestoreThread(main_tstate);
@@ -966,6 +965,64 @@ void python_plugin_cycle(plugin_instance_t *plugin)
     (void)plugin; // Suppress unused parameter warning
     // In a real implementation, you'd retrieve the python_plugin_t structure
     // and call the cycle function
+}
+
+// Call cycle_start for all active native plugins that have registered the hook
+// This should be called at the beginning of each PLC scan cycle, before PLC logic execution
+// Plugins opt-in by implementing cycle_start(); opt-out by not implementing it (NULL pointer)
+void plugin_driver_cycle_start(plugin_driver_t *driver)
+{
+    if (!driver || driver->plugin_count == 0)
+    {
+        return;
+    }
+
+    for (int i = 0; i < driver->plugin_count; i++)
+    {
+        plugin_instance_t *plugin = &driver->plugins[i];
+
+        // Skip disabled or non-running plugins
+        if (!plugin->config.enabled || !plugin->running)
+        {
+            continue;
+        }
+
+        // Only native plugins support cycle hooks (they can run in real-time)
+        if (plugin->config.type == PLUGIN_TYPE_NATIVE && plugin->native_plugin &&
+            plugin->native_plugin->cycle_start)
+        {
+            plugin->native_plugin->cycle_start();
+        }
+    }
+}
+
+// Call cycle_end for all active native plugins that have registered the hook
+// This should be called at the end of each PLC scan cycle, after PLC logic execution
+// Plugins opt-in by implementing cycle_end(); opt-out by not implementing it (NULL pointer)
+void plugin_driver_cycle_end(plugin_driver_t *driver)
+{
+    if (!driver || driver->plugin_count == 0)
+    {
+        return;
+    }
+
+    for (int i = 0; i < driver->plugin_count; i++)
+    {
+        plugin_instance_t *plugin = &driver->plugins[i];
+
+        // Skip disabled or non-running plugins
+        if (!plugin->config.enabled || !plugin->running)
+        {
+            continue;
+        }
+
+        // Only native plugins support cycle hooks (they can run in real-time)
+        if (plugin->config.type == PLUGIN_TYPE_NATIVE && plugin->native_plugin &&
+            plugin->native_plugin->cycle_end)
+        {
+            plugin->native_plugin->cycle_end();
+        }
+    }
 }
 
 // Cleanup Python plugin
