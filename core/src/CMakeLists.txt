@@ -19,11 +19,11 @@ add_compile_options(-Wall -Werror  -Wextra -fstack-protector-strong
     -D_FORTIFY_SOURCE=2 -O2 -Wformat
     -Werror=format-security -fPIC -fPIE)
 
-# On MSYS2/Cygwin, disable treating warnings as errors due to Python header conflicts
+# On Cygwin/MSYS2, disable treating warnings as errors due to header conflicts
 # The _POSIX_C_SOURCE redefinition warning is caused by Python headers vs system headers
-# Detection: WIN32 AND UNIX is true on MSYS2/Cygwin but not on native Windows or Linux
-# The -Wno-error must come AFTER -Werror to override it
-if(WIN32 AND UNIX)
+# Detection: CMAKE_SYSTEM_NAME is "CYGWIN" or "MSYS" on these platforms
+if(CMAKE_SYSTEM_NAME MATCHES "CYGWIN|MSYS")
+    # Remove -Werror but keep all other warnings and specific -Werror=format-security
     add_compile_options(-Wno-error)
 endif()
 
