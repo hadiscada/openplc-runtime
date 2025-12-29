@@ -8,6 +8,13 @@
 #include "scan_cycle_manager.h"
 #include "utils/utils.h"
 
+// CLOCK_MONOTONIC_RAW is Linux-specific, use CLOCK_MONOTONIC on other platforms
+#if defined(__CYGWIN__) || defined(__MSYS__) || !defined(CLOCK_MONOTONIC_RAW)
+#define OPENPLC_CLOCK CLOCK_MONOTONIC
+#else
+#define OPENPLC_CLOCK CLOCK_MONOTONIC_RAW
+#endif
+
 static uint64_t expected_start_us  = 0;
 static uint64_t last_start_us      = 0;
 static pthread_mutex_t stats_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -23,7 +30,7 @@ plc_timing_stats_t plc_timing_stats = {.scan_time_min     = INT64_MAX,
 static uint64_t ts_now_us(void)
 {
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+    clock_gettime(OPENPLC_CLOCK, &ts);
     return (uint64_t)ts.tv_sec * 1000000ull + ts.tv_nsec / 1000;
 }
 
