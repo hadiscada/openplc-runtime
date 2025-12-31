@@ -1,9 +1,25 @@
 #!/bin/bash
 set -e
 
-# Check for root privileges
-check_root() 
+# Detect if running on MSYS2/MinGW/Cygwin (Windows)
+is_msys2() {
+    case "$(uname -s)" in
+        MSYS*|MINGW*|CYGWIN*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# Check for root privileges (skip on MSYS2/Windows)
+check_root()
 {
+    if is_msys2; then
+        # Root is not required/meaningful on MSYS2
+        return 0
+    fi
     if [[ $EUID -ne 0 ]]; then
         echo "ERROR: This script must be run as root" >&2
         echo "Example: sudo ./install.sh" >&2
@@ -11,7 +27,7 @@ check_root()
     fi
 }
 
-# Make sure we are root before proceeding
+# Make sure we are root before proceeding (unless on MSYS2)
 check_root
 
 # Detect the project root directory
@@ -52,8 +68,15 @@ echo "OpenPLC Runtime Installation"
 echo "Project directory: $OPENPLC_DIR"
 echo "Working directory: $(pwd)"
 
-install_dependencies() 
+install_dependencies()
 {
+    # Check for MSYS2 first (before trying to source /etc/os-release)
+    if is_msys2; then
+        echo "Platform: MSYS2/Windows"
+        install_deps_msys2
+        return $?
+    fi
+
     source /etc/os-release
     echo "Distro: $ID"
 
@@ -86,7 +109,7 @@ install_dependencies()
 }
 
 # For Ubuntu/Debian
-install_deps_apt() { 
+install_deps_apt() {
     apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential \
@@ -114,46 +137,65 @@ install_deps_dnf() {
         && dnf clean all
 }
 
+# For MSYS2 on Windows
+install_deps_msys2() {
+    echo "Installing dependencies via pacman..."
+    # Update package database (but don't do full system upgrade to avoid breaking frozen bundles)
+    pacman -Sy --noconfirm
+    # Install required packages
+    pacman -S --noconfirm --needed \
+        base-devel \
+        gcc \
+        make \
+        cmake \
+        pkg-config \
+        python \
+        python-pip \
+        python-setuptools \
+        git \
+        sqlite3
+}
+
 compile_plc() {
     echo "Preparing build directory..."
-    
+
     # Always clean build directory for Docker environment or when CMake cache exists
     # This prevents cross-contamination between Linux and Docker builds
     if [ -d "$OPENPLC_DIR/build" ] && [ -f "$OPENPLC_DIR/build/CMakeCache.txt" ]; then
         echo "Cleaning existing build directory to ensure clean build..."
         rm -rf "$OPENPLC_DIR/build"
     fi
-    
+
     # Create build directory
     if ! mkdir -p "$OPENPLC_DIR/build"; then
         echo "ERROR: Failed to create build directory" >&2
         return 1
     fi
-    
+
     cd "$OPENPLC_DIR/build" || {
         echo "ERROR: Failed to change to build directory" >&2
         return 1
     }
-    
+
     echo "Running cmake configuration..."
     if ! cmake ..; then
         echo "ERROR: CMake configuration failed" >&2
         cd "$OPENPLC_DIR"
         return 1
     fi
-    
+
     echo "Compiling with make (using $(nproc) cores)..."
     if ! make -j"$(nproc)"; then
         echo "ERROR: Compilation failed" >&2
         cd "$OPENPLC_DIR"
         return 1
     fi
-    
+
     cd "$OPENPLC_DIR" || {
         echo "ERROR: Failed to return to main directory" >&2
         return 1
     }
-    
+
     echo "SUCCESS: OpenPLC compiled successfully!"
     return 0
 }
@@ -187,28 +229,28 @@ setup_plugin_venvs() {
         plugins_with_requirements+=("$plugin_name")
         log_info "Found plugin with requirements: $plugin_name"
     done < <(find "$plugins_dir" -name "requirements.txt" -type f -print0)
-    
+
     # If no plugins found, return
     if [ ${#plugins_with_requirements[@]} -eq 0 ]; then
         log_info "No plugins with requirements.txt found"
         return 0
     fi
-    
+
     log_info "Found ${#plugins_with_requirements[@]} plugin(s) that need virtual environments"
-    
+
     # Create virtual environments for each plugin
     for plugin_name in "${plugins_with_requirements[@]}"; do
         local venv_path="$OPENPLC_DIR/venvs/$plugin_name"
         local requirements_file="$plugins_dir/$plugin_name/requirements.txt"
-        
+
         if [ -d "$venv_path" ]; then
             log_info "Virtual environment already exists for $plugin_name"
-            
+
             # Check if requirements.txt is newer than the venv (dependencies may have changed)
             if [ "$requirements_file" -nt "$venv_path" ]; then
                 log_warning "Requirements file is newer than venv for $plugin_name"
                 log_info "Updating dependencies for $plugin_name..."
-                
+
                 if bash "$manage_script" install "$plugin_name"; then
                     log_success "Dependencies updated for $plugin_name"
                 else
@@ -220,7 +262,7 @@ setup_plugin_venvs() {
             fi
         else
             log_info "Creating virtual environment for plugin: $plugin_name"
-            
+
             if bash "$manage_script" create "$plugin_name"; then
                 log_success "Virtual environment created for $plugin_name"
             else
@@ -229,14 +271,20 @@ setup_plugin_venvs() {
             fi
         fi
     done
-    
+
     log_success "All plugin virtual environments are ready"
     return 0
 }
 
 # Setup runtime directory (needed for both Linux and Docker)
-mkdir -p /var/run/runtime
-chmod 775 /var/run/runtime 2>/dev/null || true  # Ignore permission errors in Docker
+# On MSYS2, use /run/runtime which maps to the MSYS2 installation directory
+if is_msys2; then
+    mkdir -p /run/runtime 2>/dev/null || true
+    chmod 775 /run/runtime 2>/dev/null || true
+else
+    mkdir -p /var/run/runtime
+    chmod 775 /var/run/runtime 2>/dev/null || true  # Ignore permission errors in Docker
+fi
 
 # Make scripts executable
 chmod +x "$OPENPLC_DIR/install.sh" 2>/dev/null || true
