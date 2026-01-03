@@ -12,11 +12,49 @@ from webserver.logger import get_logger
 logger, buffer = get_logger("logger", use_buffer=True)
 
 
+def is_running_in_container():
+    """
+    Detect if running inside a container (Docker, Podman, etc.).
+    Returns True if running in a container, False otherwise.
+    """
+    # Check for /.dockerenv file (Docker-specific)
+    if os.path.exists("/.dockerenv"):
+        return True
+
+    # Check for container environment variables
+    if os.environ.get("container") or os.environ.get("DOCKER_CONTAINER"):
+        return True
+
+    # Check cgroup for container indicators
+    try:
+        with open("/proc/1/cgroup", "r", encoding="utf-8") as f:
+            cgroup_content = f.read()
+            if "docker" in cgroup_content or "kubepods" in cgroup_content:
+                return True
+            # Also check for containerd/cri-o patterns
+            if "/lxc/" in cgroup_content or "containerd" in cgroup_content:
+                return True
+    except (FileNotFoundError, PermissionError):
+        pass
+
+    # Check for container runtime in /proc/1/environ
+    try:
+        with open("/proc/1/environ", "rb") as f:
+            environ_content = f.read().decode("utf-8", errors="ignore")
+            if "container=" in environ_content:
+                return True
+    except (FileNotFoundError, PermissionError):
+        pass
+
+    return False
+
+
 def get_runtime_dir():
     """
     Get the runtime directory path based on the platform.
     On MSYS2/Cygwin, use /run/runtime (which maps to a Windows path).
-    On Linux, use /var/run/runtime for Docker volume compatibility.
+    On Linux in containers, use /var/run/runtime for Docker volume compatibility.
+    On native Linux, use /var/run/runtime for ephemeral data (sockets).
     """
     if platform.system() != "Linux":
         runtime_dir = Path("/run/runtime")
@@ -28,9 +66,32 @@ def get_runtime_dir():
     return runtime_dir
 
 
+def get_persistent_data_dir():
+    """
+    Get the directory for persistent data (database, .env file).
+    On containers (Docker), use /var/run/runtime (mounted as persistent volume).
+    On native Linux, use /var/lib/openplc-runtime (survives reboot).
+    On MSYS2/Windows, use /run/runtime.
+    """
+    if platform.system() != "Linux":
+        # MSYS2/Windows: use /run/runtime
+        data_dir = Path("/run/runtime")
+    elif is_running_in_container():
+        # Container: use /var/run/runtime (expected to be a mounted volume)
+        data_dir = Path("/var/run/runtime")
+    else:
+        # Native Linux: use persistent directory that survives reboot
+        data_dir = Path("/var/lib/openplc-runtime")
+
+    # Ensure the directory exists with appropriate permissions
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir
+
+
 RUNTIME_DIR = get_runtime_dir()
-ENV_PATH = RUNTIME_DIR / ".env"
-DB_PATH = RUNTIME_DIR / "restapi.db"
+PERSISTENT_DATA_DIR = get_persistent_data_dir()
+ENV_PATH = PERSISTENT_DATA_DIR / ".env"
+DB_PATH = PERSISTENT_DATA_DIR / "restapi.db"
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
 

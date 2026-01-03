@@ -357,6 +357,15 @@ if is_msys2; then
 else
     mkdir -p /var/run/runtime
     chmod 775 /var/run/runtime 2>/dev/null || true  # Ignore permission errors in Docker
+
+    # Create persistent data directory for native Linux installs
+    # This directory stores .env and database files that must survive reboot
+    # In Docker, /var/run/runtime is mounted as a persistent volume instead
+    if has_systemd_support; then
+        mkdir -p /var/lib/openplc-runtime
+        chmod 755 /var/lib/openplc-runtime
+        log_info "Created persistent data directory at /var/lib/openplc-runtime"
+    fi
 fi
 
 # Make scripts executable
