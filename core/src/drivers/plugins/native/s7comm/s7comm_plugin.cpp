@@ -603,7 +603,7 @@ extern "C" void cycle_end(void)
     int server_status = 0;
     int cpu_status = 0;
     int clients_count = 0;
-    Srv_GetStatus(g_server, &server_status, &cpu_status, &clients_count);
+    Srv_GetStatus(g_server, server_status, cpu_status, clients_count);
 
     if (clients_count == 0) {
         /* No clients connected - no need to sync buffers */

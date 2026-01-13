@@ -106,8 +106,9 @@ target_compile_options(s7comm_plugin PRIVATE
     -Wno-unused-parameter
     -Wno-sign-compare
     -Wno-deprecated-declarations
-    $<$<CXX_COMPILER_ID:GNU>:-Wno-class-memaccess>
-    $<$<CXX_COMPILER_ID:Clang>:-Wno-macro-redefined>
+    # C++-only warning flags (only apply to C++ files)
+    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:GNU>>:-Wno-class-memaccess>
+    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:Clang>>:-Wno-macro-redefined>
 )
 
 # =============================================================================
