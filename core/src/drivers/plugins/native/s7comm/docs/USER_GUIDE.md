@@ -11,7 +11,9 @@ The S7Comm plugin enables OpenPLC Runtime v4 to communicate using the Siemens S7
 - Support for all OpenPLC buffer types (BOOL, BYTE, UINT, UDINT, ULINT)
 - Multiple concurrent client connections
 - Configurable PLC identity for S7 client compatibility
-- Thread-safe operation synchronized with PLC scan cycle
+- Double-buffered, thread-safe operation (S7 clients run asynchronously from PLC cycle)
+- Automatic optimization: no overhead when no clients are connected
+- Centralized logging integrated with OpenPLC Editor
 
 ## Quick Start
 
@@ -510,13 +512,43 @@ client.ConnectTo('192.168.1.100', 0, 0, (err) => {
 3. **Firewall Rules**: Restrict access to port 102
 4. **Read-Only Mode**: Consider mapping sensitive areas as read-only
 
+## Architecture
+
+### Double-Buffering
+
+The plugin uses a double-buffering architecture for thread safety:
+
+```
+S7 Clients <---> [S7 Buffer] <---> [Shadow Buffer] <---> OpenPLC Buffers
+                     ^                    ^
+                     |                    |
+              Snap7 server          PLC cycle sync
+            (asynchronous)         (at cycle_end)
+```
+
+- **S7 Buffer**: Registered with Snap7, accessed asynchronously by S7 clients
+- **Shadow Buffer**: Used for synchronization with OpenPLC at cycle end
+- **Sync**: Happens only at cycle_end with brief mutex locks (minimal contention)
+- **Optimization**: If no clients are connected, sync is skipped entirely
+
+### Data Flow
+
+1. S7 clients read/write to S7 buffers at any time (lock-free)
+2. At end of PLC scan cycle:
+   - S7 buffer -> Shadow buffer (capture client writes)
+   - Shadow buffer <-> OpenPLC buffers (apply writes, get new values)
+   - Shadow buffer -> S7 buffer (publish to clients)
+
+## Related Documentation
+
+- [JSON Configuration Schema](JSON_SCHEMA.md) - Detailed schema reference for Editor developers
+
 ## Support
 
 For issues and feature requests:
-- GitHub Issues: https://github.com/thiagoralves/OpenPLC_v3/issues
-- OpenPLC Forum: https://openplc.discussion.community/
+- GitHub Issues: https://github.com/Autonomy-Logic/openplc-runtime/issues
 
 ---
 
-*Document Version: 1.0*
+*Document Version: 1.1*
 *Last Updated: 2026-01-12*
