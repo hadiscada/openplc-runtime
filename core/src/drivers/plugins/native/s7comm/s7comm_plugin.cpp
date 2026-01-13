@@ -580,9 +580,7 @@ extern "C" void cycle_start(void)
 /**
  * @brief Called at the end of each PLC scan cycle
  *
- * Optimization: If no clients are connected, skip sync entirely.
- *
- * Double-buffer sync strategy (when clients connected):
+ * Double-buffer sync strategy:
  * 1. Lock S7 mutex (briefly)
  * 2. Copy S7 buffers -> shadow buffers (capture S7 client writes)
  * 3. Unlock S7 mutex
@@ -596,17 +594,6 @@ extern "C" void cycle_start(void)
 extern "C" void cycle_end(void)
 {
     if (!g_initialized || !g_running || !g_config.enabled) {
-        return;
-    }
-
-    /* Check if any clients are connected - skip sync if none */
-    int server_status = 0;
-    int cpu_status = 0;
-    int clients_count = 0;
-    Srv_GetStatus(g_server, server_status, cpu_status, clients_count);
-
-    if (clients_count == 0) {
-        /* No clients connected - no need to sync buffers */
         return;
     }
 
