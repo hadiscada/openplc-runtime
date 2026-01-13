@@ -43,11 +43,20 @@ set(SNAP7_LIB_SOURCES
 )
 
 # =============================================================================
+# cJSON Library (embedded for JSON configuration parsing)
+# =============================================================================
+
+set(CJSON_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/cjson/cJSON.c
+)
+
+# =============================================================================
 # Plugin Source Files
 # =============================================================================
 
 set(PLUGIN_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/s7comm_plugin.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/s7comm_config.c
     ${OPENPLC_ROOT}/core/src/drivers/plugins/native/plugin_logger.c
 )
 
@@ -60,6 +69,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/snap7/core
     ${CMAKE_CURRENT_SOURCE_DIR}/snap7/sys
     ${CMAKE_CURRENT_SOURCE_DIR}/snap7/lib
+    ${CMAKE_CURRENT_SOURCE_DIR}/cjson
     ${OPENPLC_ROOT}/core/src/drivers
     ${OPENPLC_ROOT}/core/src/drivers/plugins/native
     ${OPENPLC_ROOT}/core/src/lib
@@ -73,6 +83,7 @@ add_library(s7comm_plugin SHARED
     ${SNAP7_CORE_SOURCES}
     ${SNAP7_SYS_SOURCES}
     ${SNAP7_LIB_SOURCES}
+    ${CJSON_SOURCES}
     ${PLUGIN_SOURCES}
 )
 
