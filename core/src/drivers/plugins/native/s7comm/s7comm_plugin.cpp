@@ -269,7 +269,7 @@ static int register_all_areas(void)
 {
     int result;
 
-    /* Register system areas (using S7 buffers, not shadow) */
+    /* Register system areas (using S7 buffers) */
     if (g_pe_runtime.enabled && g_pe_runtime.s7_buffer != NULL) {
         result = Srv_RegisterArea(g_server, srvAreaPE, 0, g_pe_runtime.s7_buffer, g_pe_runtime.size_bytes);
         if (result != 0) {
@@ -690,6 +690,37 @@ static s7comm_area_runtime_t* find_area_runtime(int area)
     }
 }
 
+/**
+ * @brief Get size of a single element for a buffer type
+ */
+static int get_type_size(s7comm_buffer_type_t type)
+{
+    switch (type) {
+        case BUFFER_TYPE_BOOL_INPUT:
+        case BUFFER_TYPE_BOOL_OUTPUT:
+        case BUFFER_TYPE_BOOL_MEMORY:
+            return 1;  /* 1 byte per bool group */
+
+        case BUFFER_TYPE_INT_INPUT:
+        case BUFFER_TYPE_INT_OUTPUT:
+        case BUFFER_TYPE_INT_MEMORY:
+            return 2;  /* 2 bytes per INT */
+
+        case BUFFER_TYPE_DINT_INPUT:
+        case BUFFER_TYPE_DINT_OUTPUT:
+        case BUFFER_TYPE_DINT_MEMORY:
+            return 4;  /* 4 bytes per DINT */
+
+        case BUFFER_TYPE_LINT_INPUT:
+        case BUFFER_TYPE_LINT_OUTPUT:
+        case BUFFER_TYPE_LINT_MEMORY:
+            return 8;  /* 8 bytes per LINT */
+
+        default:
+            return 1;
+    }
+}
+
 /*
  * =============================================================================
  * Read Functions: OpenPLC -> S7 Buffer (for S7 client READs)
@@ -1064,35 +1095,4 @@ static int s7comm_rw_area_callback(void *usrPtr, int Sender, int Operation, PS7T
     }
 
     return 0;  /* Accept operation */
-}
-
-/**
- * @brief Get size of a single element for a buffer type
- */
-static int get_type_size(s7comm_buffer_type_t type)
-{
-    switch (type) {
-        case BUFFER_TYPE_BOOL_INPUT:
-        case BUFFER_TYPE_BOOL_OUTPUT:
-        case BUFFER_TYPE_BOOL_MEMORY:
-            return 1;  /* 1 byte per bool group */
-
-        case BUFFER_TYPE_INT_INPUT:
-        case BUFFER_TYPE_INT_OUTPUT:
-        case BUFFER_TYPE_INT_MEMORY:
-            return 2;  /* 2 bytes per INT */
-
-        case BUFFER_TYPE_DINT_INPUT:
-        case BUFFER_TYPE_DINT_OUTPUT:
-        case BUFFER_TYPE_DINT_MEMORY:
-            return 4;  /* 4 bytes per DINT */
-
-        case BUFFER_TYPE_LINT_INPUT:
-        case BUFFER_TYPE_LINT_OUTPUT:
-        case BUFFER_TYPE_LINT_MEMORY:
-            return 8;  /* 8 bytes per LINT */
-
-        default:
-            return 1;
-    }
 }
