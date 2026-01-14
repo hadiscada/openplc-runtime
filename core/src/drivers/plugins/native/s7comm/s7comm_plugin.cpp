@@ -750,20 +750,15 @@ static void read_openplc_bool_to_buffer(uint8_t *dest, int size, s7comm_buffer_t
             buffer = g_runtime_args.bool_memory;
             break;
         default:
-            plugin_logger_warn(&g_logger, "read_bool: unknown type %d", type);
             return;
     }
 
     if (buffer == NULL) {
-        plugin_logger_warn(&g_logger, "read_bool: buffer is NULL for type %d", type);
         return;
     }
 
     int max_bytes = g_runtime_args.buffer_size - start_buffer;
     if (max_bytes > size) max_bytes = size;
-
-    plugin_logger_debug(&g_logger, "read_bool: type=%d, start=%d, size=%d, max_bytes=%d, buffer_size=%d",
-                        type, start_buffer, size, max_bytes, g_runtime_args.buffer_size);
 
     for (int byte_idx = 0; byte_idx < max_bytes; byte_idx++) {
         uint8_t byte_val = 0;
@@ -772,11 +767,6 @@ static void read_openplc_bool_to_buffer(uint8_t *dest, int size, s7comm_buffer_t
             IEC_BOOL *ptr = buffer[plc_idx][bit_idx];
             if (ptr != NULL && *ptr) {
                 byte_val |= (1 << bit_idx);
-            }
-            /* Debug first byte only to avoid log spam */
-            if (byte_idx == 0 && bit_idx < 4) {
-                plugin_logger_debug(&g_logger, "read_bool: [%d][%d] ptr=%p val=%d",
-                                   plc_idx, bit_idx, (void*)ptr, ptr ? *ptr : -1);
             }
         }
         dest[byte_idx] = byte_val;
@@ -1066,15 +1056,7 @@ static int s7comm_rw_area_callback(void *usrPtr, int Sender, int Operation, PS7T
     (void)usrPtr;
     (void)Sender;
 
-    plugin_logger_debug(&g_logger, "RWArea callback: Area=0x%02X, DBNum=%d, Start=%d, Size=%d, Op=%s",
-                        PTag ? PTag->Area : 0,
-                        PTag ? PTag->DBNumber : 0,
-                        PTag ? PTag->Start : 0,
-                        PTag ? PTag->Size : 0,
-                        Operation == OperationRead ? "READ" : "WRITE");
-
     if (pUsrData == NULL || PTag == NULL) {
-        plugin_logger_warn(&g_logger, "RWArea callback: NULL pointer (pUsrData=%p, PTag=%p)", pUsrData, PTag);
         return -1;
     }
 
@@ -1087,23 +1069,20 @@ static int s7comm_rw_area_callback(void *usrPtr, int Sender, int Operation, PS7T
         /* Data block - look up configuration */
         s7comm_db_runtime_t *db = find_db_runtime(PTag->DBNumber);
         if (db == NULL) {
-            plugin_logger_warn(&g_logger, "RWArea: DB%d not configured, returning zeros", PTag->DBNumber);
+            /* DB not configured - return zeros for read, ignore write */
             return 0;
         }
         type = db->type;
         start_buffer = db->start_buffer + (PTag->Start / get_type_size(type));
-        plugin_logger_debug(&g_logger, "RWArea: DB%d -> type=%d, start_buffer=%d", PTag->DBNumber, type, start_buffer);
     } else {
         /* System area (PE, PA, MK) */
         s7comm_area_runtime_t *area = find_area_runtime(PTag->Area);
         if (area == NULL) {
-            plugin_logger_warn(&g_logger, "RWArea: Area 0x%02X not configured (S7AreaPE=0x%02X, S7AreaPA=0x%02X, S7AreaMK=0x%02X)",
-                              PTag->Area, S7AreaPE, S7AreaPA, S7AreaMK);
+            /* Area not configured - return zeros for read, ignore write */
             return 0;
         }
         type = area->type;
         start_buffer = area->start_buffer + (PTag->Start / get_type_size(type));
-        plugin_logger_debug(&g_logger, "RWArea: Area 0x%02X -> type=%d, start_buffer=%d", PTag->Area, type, start_buffer);
     }
 
     if (Operation == OperationRead) {
@@ -1114,13 +1093,6 @@ static int s7comm_rw_area_callback(void *usrPtr, int Sender, int Operation, PS7T
         g_runtime_args.mutex_take(g_runtime_args.buffer_mutex);
         read_openplc_to_buffer((uint8_t *)pUsrData, size, type, start_buffer);
         g_runtime_args.mutex_give(g_runtime_args.buffer_mutex);
-
-        /* Debug: dump first few bytes of read data */
-        uint8_t *data = (uint8_t *)pUsrData;
-        if (size >= 1) {
-            plugin_logger_debug(&g_logger, "RWArea READ result: [0]=0x%02X (size=%d, type=%d, start=%d)",
-                               data[0], size, type, start_buffer);
-        }
     } else if (Operation == OperationWrite) {
         /*
          * S7 client is WRITing - journal the changes
