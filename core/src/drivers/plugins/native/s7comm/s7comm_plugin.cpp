@@ -674,16 +674,19 @@ static s7comm_db_runtime_t* find_db_runtime(int db_number)
 }
 
 /**
- * @brief Find system area runtime structure by S7 area code
+ * @brief Find system area runtime structure by S7 protocol area code
+ *
+ * Note: The callback receives S7 protocol area codes (S7AreaPE=0x81, S7AreaPA=0x82, etc.)
+ * not server area codes (srvAreaPE=0, srvAreaPA=1, etc.)
  */
 static s7comm_area_runtime_t* find_area_runtime(int area)
 {
     switch (area) {
-        case srvAreaPE:
+        case S7AreaPE:
             return g_pe_runtime.enabled ? &g_pe_runtime : NULL;
-        case srvAreaPA:
+        case S7AreaPA:
             return g_pa_runtime.enabled ? &g_pa_runtime : NULL;
-        case srvAreaMK:
+        case S7AreaMK:
             return g_mk_runtime.enabled ? &g_mk_runtime : NULL;
         default:
             return NULL;
@@ -1057,8 +1060,8 @@ static int s7comm_rw_area_callback(void *usrPtr, int Sender, int Operation, PS7T
     int start_buffer;
     int size = PTag->Size;
 
-    /* Determine mapping based on S7 area */
-    if (PTag->Area == srvAreaDB) {
+    /* Determine mapping based on S7 protocol area code */
+    if (PTag->Area == S7AreaDB) {
         /* Data block - look up configuration */
         s7comm_db_runtime_t *db = find_db_runtime(PTag->DBNumber);
         if (db == NULL) {
