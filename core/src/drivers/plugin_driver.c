@@ -282,7 +282,8 @@ int plugin_driver_init(plugin_driver_t *driver)
     }
 
     // Only acquire Python GIL if we have Python plugins and Python is initialized
-    PyGILState_STATE local_gstate;
+    // Initialize to PyGILState_LOCKED (0) to satisfy compiler warning
+    PyGILState_STATE local_gstate = PyGILState_LOCKED;
     int have_gil = has_python_plugin && Py_IsInitialized();
     if (have_gil)
     {
@@ -624,7 +625,8 @@ void plugin_driver_destroy(plugin_driver_t *driver)
 
     // Check if Python is initialized before any Python operations
     int python_initialized = has_python_plugin && Py_IsInitialized();
-    PyGILState_STATE local_gstate;
+    // Initialize to PyGILState_LOCKED (0) to satisfy compiler warning
+    PyGILState_STATE local_gstate = PyGILState_LOCKED;
 
     if (python_initialized)
     {
