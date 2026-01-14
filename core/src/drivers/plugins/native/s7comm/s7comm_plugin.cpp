@@ -5,21 +5,16 @@
  * This plugin implements a Siemens S7 communication server using the Snap7 library.
  * It allows S7-compatible HMIs and SCADA systems to read/write OpenPLC I/O buffers.
  *
- * Buffer Sync Strategy:
- * - S7 buffers: What Snap7 clients read/write (accessed asynchronously)
- * - Shadow buffers: Used for sync with OpenPLC (minimizes mutex hold time)
- * - S7 mutex: Protects S7 buffers during brief memcpy operations
+ * Buffer Sync Strategy (using journal buffer system):
+ * - S7 buffers: What Snap7 clients read/write (managed by Snap7 server)
+ * - Journal writes: Race-condition-free writes to OpenPLC buffers
  *
- * Data flow (full bidirectional sync for ALL types):
- * - cycle_start: Copy ENTIRE S7 buffer -> OpenPLC buffer
- *   S7 client writes become visible to the PLC program
+ * Data flow (on-demand via Snap7 RWArea callback):
+ * - S7 client READ: Callback acquires OpenPLC mutex, copies fresh data to S7 buffer
+ * - S7 client WRITE: Callback uses journal writes (thread-safe, no mutex needed)
  *
- * - cycle_end: Copy ENTIRE OpenPLC buffer -> S7 buffer
- *   PLC program outputs become visible to S7 clients
- *
- * This approach allows S7 clients to write to any location. Values that are
- * actively driven by the PLC program or I/O drivers will be overwritten
- * during the scan cycle, but S7 writes to other locations will persist.
+ * This approach allows the S7 server thread to run independently without
+ * requiring cycle_start/cycle_end hooks for data synchronization.
  */
 
 #include <cstdio>
@@ -30,6 +25,7 @@
 /* Snap7 includes */
 #include "snap7_libmain.h"
 #include "s7_types.h"
+#include "s7_server.h"  /* For OperationRead, OperationWrite, TS7Tag */
 
 /* Plugin includes */
 extern "C" {
@@ -48,7 +44,7 @@ extern "C" {
 
 /*
  * =============================================================================
- * Data Block Runtime Structure (with double-buffering)
+ * Data Block Runtime Structure
  * =============================================================================
  */
 typedef struct {
@@ -58,12 +54,11 @@ typedef struct {
     int size_bytes;                 /* Size in bytes */
     bool bit_addressing;            /* Bit-level access enabled */
     uint8_t *s7_buffer;             /* S7 buffer (registered with Snap7) */
-    uint8_t *shadow_buffer;         /* Shadow buffer for sync with OpenPLC */
 } s7comm_db_runtime_t;
 
 /*
  * =============================================================================
- * System Area Runtime Structure (with double-buffering)
+ * System Area Runtime Structure
  * =============================================================================
  */
 typedef struct {
@@ -72,7 +67,6 @@ typedef struct {
     s7comm_buffer_type_t type;
     int start_buffer;
     uint8_t *s7_buffer;             /* S7 buffer (registered with Snap7) */
-    uint8_t *shadow_buffer;         /* Shadow buffer for sync with OpenPLC */
 } s7comm_area_runtime_t;
 
 /*
@@ -90,14 +84,13 @@ static bool g_config_loaded = false;
 /* Snap7 server handle (S7Object is uintptr_t, use 0 for null) */
 static S7Object g_server = 0;
 
-/* S7 buffer mutex - protects S7 buffers during sync */
-static pthread_mutex_t g_s7_mutex = PTHREAD_MUTEX_INITIALIZER;
+/* No S7 buffer mutex needed - reads use OpenPLC mutex, writes use journal */
 
 /* Runtime data blocks (dynamically allocated based on config) */
 static s7comm_db_runtime_t g_db_runtime[S7COMM_MAX_DATA_BLOCKS];
 static int g_num_db_runtime = 0;
 
-/* System area runtime (with double-buffering) */
+/* System area runtime */
 static s7comm_area_runtime_t g_pe_runtime;
 static s7comm_area_runtime_t g_pa_runtime;
 static s7comm_area_runtime_t g_mk_runtime;
@@ -108,11 +101,15 @@ static s7comm_area_runtime_t g_mk_runtime;
  * =============================================================================
  */
 static void s7comm_event_callback(void *usrPtr, PSrvEvent PEvent, int Size);
+static int s7comm_rw_area_callback(void *usrPtr, int Sender, int Operation, PS7Tag PTag, void *pUsrData);
 static int allocate_buffers(void);
 static void free_buffers(void);
 static int register_all_areas(void);
-static void sync_shadow_to_openplc_by_type(uint8_t *shadow, int size, s7comm_buffer_type_t type, int start_buffer);
-static void sync_openplc_to_shadow_by_type(uint8_t *shadow, int size, s7comm_buffer_type_t type, int start_buffer);
+static void read_openplc_to_buffer(uint8_t *dest, int size, s7comm_buffer_type_t type, int start_buffer);
+static void write_buffer_to_openplc_journal(uint8_t *src, int size, s7comm_buffer_type_t type, int start_buffer);
+static s7comm_db_runtime_t* find_db_runtime(int db_number);
+static s7comm_area_runtime_t* find_area_runtime(int area);
+static int get_type_size(s7comm_buffer_type_t type);
 
 /*
  * =============================================================================
@@ -152,7 +149,7 @@ static inline uint64_t swap64(uint64_t val)
  */
 
 /**
- * @brief Allocate a system area with double-buffering
+ * @brief Allocate a system area buffer
  */
 static int allocate_area(s7comm_area_runtime_t *area, const s7comm_system_area_t *config)
 {
@@ -174,19 +171,11 @@ static int allocate_area(s7comm_area_runtime_t *area, const s7comm_system_area_t
         return -1;
     }
 
-    /* Allocate shadow buffer (for sync with OpenPLC) */
-    area->shadow_buffer = (uint8_t *)calloc(1, config->size_bytes);
-    if (area->shadow_buffer == NULL) {
-        free(area->s7_buffer);
-        area->s7_buffer = NULL;
-        return -1;
-    }
-
     return 0;
 }
 
 /**
- * @brief Free a system area's buffers
+ * @brief Free a system area's buffer
  */
 static void free_area(s7comm_area_runtime_t *area)
 {
@@ -194,37 +183,33 @@ static void free_area(s7comm_area_runtime_t *area)
         free(area->s7_buffer);
         area->s7_buffer = NULL;
     }
-    if (area->shadow_buffer != NULL) {
-        free(area->shadow_buffer);
-        area->shadow_buffer = NULL;
-    }
     area->enabled = false;
 }
 
 /**
- * @brief Allocate all buffers (S7 + shadow) based on configuration
+ * @brief Allocate all S7 buffers based on configuration
  */
 static int allocate_buffers(void)
 {
     g_num_db_runtime = 0;
 
-    /* Allocate system areas with double-buffering */
+    /* Allocate system areas */
     if (allocate_area(&g_pe_runtime, &g_config.pe_area) != 0) {
-        plugin_logger_error(&g_logger, "Failed to allocate PE area buffers");
+        plugin_logger_error(&g_logger, "Failed to allocate PE area buffer");
         return -1;
     }
 
     if (allocate_area(&g_pa_runtime, &g_config.pa_area) != 0) {
-        plugin_logger_error(&g_logger, "Failed to allocate PA area buffers");
+        plugin_logger_error(&g_logger, "Failed to allocate PA area buffer");
         return -1;
     }
 
     if (allocate_area(&g_mk_runtime, &g_config.mk_area) != 0) {
-        plugin_logger_error(&g_logger, "Failed to allocate MK area buffers");
+        plugin_logger_error(&g_logger, "Failed to allocate MK area buffer");
         return -1;
     }
 
-    /* Allocate data blocks with double-buffering */
+    /* Allocate data blocks */
     for (int i = 0; i < g_config.num_data_blocks; i++) {
         const s7comm_data_block_t *db_cfg = &g_config.data_blocks[i];
 
@@ -248,17 +233,8 @@ static int allocate_buffers(void)
             return -1;
         }
 
-        /* Allocate shadow buffer */
-        db_rt->shadow_buffer = (uint8_t *)calloc(1, db_cfg->size_bytes);
-        if (db_rt->shadow_buffer == NULL) {
-            plugin_logger_error(&g_logger, "Failed to allocate DB%d shadow buffer", db_cfg->db_number);
-            free(db_rt->s7_buffer);
-            db_rt->s7_buffer = NULL;
-            return -1;
-        }
-
         g_num_db_runtime++;
-        plugin_logger_debug(&g_logger, "Allocated DB%d: %d bytes (double-buffered), type=%s",
+        plugin_logger_debug(&g_logger, "Allocated DB%d: %d bytes, type=%s",
                            db_cfg->db_number, db_cfg->size_bytes,
                            s7comm_buffer_type_name(db_cfg->mapping.type));
     }
@@ -282,10 +258,6 @@ static void free_buffers(void)
             free(g_db_runtime[i].s7_buffer);
             g_db_runtime[i].s7_buffer = NULL;
         }
-        if (g_db_runtime[i].shadow_buffer != NULL) {
-            free(g_db_runtime[i].shadow_buffer);
-            g_db_runtime[i].shadow_buffer = NULL;
-        }
     }
     g_num_db_runtime = 0;
 }
@@ -297,7 +269,7 @@ static int register_all_areas(void)
 {
     int result;
 
-    /* Register system areas (using S7 buffers, not shadow) */
+    /* Register system areas (using S7 buffers) */
     if (g_pe_runtime.enabled && g_pe_runtime.s7_buffer != NULL) {
         result = Srv_RegisterArea(g_server, srvAreaPE, 0, g_pe_runtime.s7_buffer, g_pe_runtime.size_bytes);
         if (result != 0) {
@@ -352,7 +324,7 @@ extern "C" int init(void *args)
 {
     /* Initialize logger first (before we have runtime_args) */
     plugin_logger_init(&g_logger, "S7COMM", NULL);
-    plugin_logger_info(&g_logger, "Initializing S7Comm plugin (double-buffered)...");
+    plugin_logger_info(&g_logger, "Initializing S7Comm plugin (journal-buffered)...");
 
     if (!args) {
         plugin_logger_error(&g_logger, "init args is NULL");
@@ -366,9 +338,6 @@ extern "C" int init(void *args)
     plugin_logger_init(&g_logger, "S7COMM", args);
 
     plugin_logger_info(&g_logger, "Buffer size: %d", g_runtime_args.buffer_size);
-
-    /* Initialize S7 buffer mutex */
-    pthread_mutex_init(&g_s7_mutex, NULL);
 
     /* Parse configuration file */
     const char *config_path = g_runtime_args.plugin_specific_config_file_path;
@@ -401,7 +370,7 @@ extern "C" int init(void *args)
     plugin_logger_info(&g_logger, "PLC identity: %s (%s)", g_config.identity.name, g_config.identity.module_type);
     plugin_logger_info(&g_logger, "Data blocks configured: %d", g_config.num_data_blocks);
 
-    /* Allocate all buffers (S7 + shadow for double-buffering) */
+    /* Allocate S7 buffers */
     if (allocate_buffers() != 0) {
         plugin_logger_error(&g_logger, "Failed to allocate buffers");
         free_buffers();
@@ -450,11 +419,14 @@ extern "C" int init(void *args)
     /* Set event callback for logging */
     Srv_SetEventsCallback(g_server, s7comm_event_callback, NULL);
 
+    /* Set RWArea callback for on-demand data synchronization */
+    Srv_SetRWAreaCallback(g_server, s7comm_rw_area_callback, NULL);
+
     /* Register all S7 areas with the server */
     register_all_areas();
 
     g_initialized = true;
-    plugin_logger_info(&g_logger, "S7Comm plugin initialized successfully (double-buffered mode)");
+    plugin_logger_info(&g_logger, "S7Comm plugin initialized successfully (journal-buffered mode)");
 
     /* Log registered areas summary */
     if (g_pe_runtime.enabled) {
@@ -564,7 +536,6 @@ extern "C" void cleanup(void)
     }
 
     free_buffers();
-    pthread_mutex_destroy(&g_s7_mutex);
 
     g_initialized = false;
     g_config_loaded = false;
@@ -574,131 +545,23 @@ extern "C" void cleanup(void)
 /**
  * @brief Called at the start of each PLC scan cycle
  *
- * Copy ENTIRE S7 buffer -> OpenPLC buffer for ALL types.
- * This allows S7 clients to write to any location. Values that are actively
- * driven by the PLC program or I/O drivers will be overwritten during the
- * scan cycle, but S7 writes to other locations will persist.
+ * With the journal-based approach, data synchronization happens on-demand
+ * via the RWArea callback. No action needed here.
  */
 extern "C" void cycle_start(void)
 {
-    if (!g_initialized || !g_running || !g_config.enabled) {
-        return;
-    }
-
-    /*
-     * Lock S7 mutex and copy S7 -> shadow for ALL areas
-     * This captures everything S7 clients have written
-     */
-    pthread_mutex_lock(&g_s7_mutex);
-
-    /* Copy all system areas S7 -> shadow */
-    if (g_pe_runtime.enabled) {
-        memcpy(g_pe_runtime.shadow_buffer, g_pe_runtime.s7_buffer, g_pe_runtime.size_bytes);
-    }
-    if (g_pa_runtime.enabled) {
-        memcpy(g_pa_runtime.shadow_buffer, g_pa_runtime.s7_buffer, g_pa_runtime.size_bytes);
-    }
-    if (g_mk_runtime.enabled) {
-        memcpy(g_mk_runtime.shadow_buffer, g_mk_runtime.s7_buffer, g_mk_runtime.size_bytes);
-    }
-
-    /* Copy all data blocks S7 -> shadow */
-    for (int i = 0; i < g_num_db_runtime; i++) {
-        s7comm_db_runtime_t *db = &g_db_runtime[i];
-        memcpy(db->shadow_buffer, db->s7_buffer, db->size_bytes);
-    }
-
-    pthread_mutex_unlock(&g_s7_mutex);
-
-    /*
-     * Sync shadow -> OpenPLC for ALL areas
-     * S7 client writes become visible to the PLC program
-     */
-
-    /* Sync all system areas shadow -> OpenPLC */
-    if (g_pe_runtime.enabled) {
-        sync_shadow_to_openplc_by_type(g_pe_runtime.shadow_buffer, g_pe_runtime.size_bytes,
-                                       g_pe_runtime.type, g_pe_runtime.start_buffer);
-    }
-    if (g_pa_runtime.enabled) {
-        sync_shadow_to_openplc_by_type(g_pa_runtime.shadow_buffer, g_pa_runtime.size_bytes,
-                                       g_pa_runtime.type, g_pa_runtime.start_buffer);
-    }
-    if (g_mk_runtime.enabled) {
-        sync_shadow_to_openplc_by_type(g_mk_runtime.shadow_buffer, g_mk_runtime.size_bytes,
-                                       g_mk_runtime.type, g_mk_runtime.start_buffer);
-    }
-
-    /* Sync all data blocks shadow -> OpenPLC */
-    for (int i = 0; i < g_num_db_runtime; i++) {
-        s7comm_db_runtime_t *db = &g_db_runtime[i];
-        sync_shadow_to_openplc_by_type(db->shadow_buffer, db->size_bytes, db->type, db->start_buffer);
-    }
+    /* Data sync is handled on-demand via RWArea callback */
 }
 
 /**
  * @brief Called at the end of each PLC scan cycle
  *
- * Copy ENTIRE OpenPLC buffer -> S7 buffer for ALL types.
- * This makes all PLC values visible to S7 clients. Any values driven by
- * the PLC program or I/O drivers during the scan cycle will overwrite
- * whatever S7 clients wrote at cycle_start.
+ * With the journal-based approach, data synchronization happens on-demand
+ * via the RWArea callback. No action needed here.
  */
 extern "C" void cycle_end(void)
 {
-    if (!g_initialized || !g_running || !g_config.enabled) {
-        return;
-    }
-
-    /*
-     * Sync OpenPLC -> shadow for ALL areas
-     * This captures the final state after PLC execution
-     */
-
-    /* Sync all system areas OpenPLC -> shadow */
-    if (g_pe_runtime.enabled) {
-        sync_openplc_to_shadow_by_type(g_pe_runtime.shadow_buffer, g_pe_runtime.size_bytes,
-                                       g_pe_runtime.type, g_pe_runtime.start_buffer);
-    }
-    if (g_pa_runtime.enabled) {
-        sync_openplc_to_shadow_by_type(g_pa_runtime.shadow_buffer, g_pa_runtime.size_bytes,
-                                       g_pa_runtime.type, g_pa_runtime.start_buffer);
-    }
-    if (g_mk_runtime.enabled) {
-        sync_openplc_to_shadow_by_type(g_mk_runtime.shadow_buffer, g_mk_runtime.size_bytes,
-                                       g_mk_runtime.type, g_mk_runtime.start_buffer);
-    }
-
-    /* Sync all data blocks OpenPLC -> shadow */
-    for (int i = 0; i < g_num_db_runtime; i++) {
-        s7comm_db_runtime_t *db = &g_db_runtime[i];
-        sync_openplc_to_shadow_by_type(db->shadow_buffer, db->size_bytes, db->type, db->start_buffer);
-    }
-
-    /*
-     * Lock S7 mutex and copy shadow -> S7 for ALL areas
-     * This makes PLC values visible to S7 clients
-     */
-    pthread_mutex_lock(&g_s7_mutex);
-
-    /* Copy all system areas shadow -> S7 */
-    if (g_pe_runtime.enabled) {
-        memcpy(g_pe_runtime.s7_buffer, g_pe_runtime.shadow_buffer, g_pe_runtime.size_bytes);
-    }
-    if (g_pa_runtime.enabled) {
-        memcpy(g_pa_runtime.s7_buffer, g_pa_runtime.shadow_buffer, g_pa_runtime.size_bytes);
-    }
-    if (g_mk_runtime.enabled) {
-        memcpy(g_mk_runtime.s7_buffer, g_mk_runtime.shadow_buffer, g_mk_runtime.size_bytes);
-    }
-
-    /* Copy all data blocks shadow -> S7 */
-    for (int i = 0; i < g_num_db_runtime; i++) {
-        s7comm_db_runtime_t *db = &g_db_runtime[i];
-        memcpy(db->s7_buffer, db->shadow_buffer, db->size_bytes);
-    }
-
-    pthread_mutex_unlock(&g_s7_mutex);
+    /* Data sync is handled on-demand via RWArea callback */
 }
 
 /*
@@ -761,53 +624,118 @@ static void s7comm_event_callback(void *usrPtr, PSrvEvent PEvent, int Size)
 
 /*
  * =============================================================================
- * Buffer Synchronization Functions (Shadow <-> OpenPLC)
+ * On-Demand Data Synchronization (via RWArea Callback)
+ *
+ * S7 client READs: Acquire OpenPLC mutex, copy to S7 buffer, release mutex
+ * S7 client WRITEs: Use journal writes (thread-safe, no mutex needed)
  * =============================================================================
  */
 
 /**
- * @brief Sync a bool buffer from shadow to OpenPLC
+ * @brief Map s7comm buffer type to journal buffer type
  *
- * Copies S7 client writes to OpenPLC buffers. Used at cycle_start for ALL types.
- * The PLC program and I/O drivers will overwrite values they actively control.
+ * Journal buffer types (from plugin_types.h):
+ *   0=BOOL_INPUT, 1=BOOL_OUTPUT, 2=BOOL_MEMORY
+ *   3=BYTE_INPUT, 4=BYTE_OUTPUT
+ *   5=INT_INPUT, 6=INT_OUTPUT, 7=INT_MEMORY
+ *   8=DINT_INPUT, 9=DINT_OUTPUT, 10=DINT_MEMORY
+ *   11=LINT_INPUT, 12=LINT_OUTPUT, 13=LINT_MEMORY
  */
-static void sync_shadow_bool_to_openplc(uint8_t *shadow, int size, s7comm_buffer_type_t type, int start_buffer)
+static int map_to_journal_type(s7comm_buffer_type_t type)
 {
-    IEC_BOOL *(*buffer)[8] = NULL;
-
     switch (type) {
-        case BUFFER_TYPE_BOOL_INPUT:
-            buffer = g_runtime_args.bool_input;
-            break;
-        case BUFFER_TYPE_BOOL_OUTPUT:
-            buffer = g_runtime_args.bool_output;
-            break;
-        case BUFFER_TYPE_BOOL_MEMORY:
-            buffer = g_runtime_args.bool_memory;
-            break;
-        default:
-            return;
-    }
-
-    int max_bytes = g_runtime_args.buffer_size - start_buffer;
-    if (max_bytes > size) max_bytes = size;
-
-    for (int byte_idx = 0; byte_idx < max_bytes; byte_idx++) {
-        uint8_t byte_val = shadow[byte_idx];
-        int plc_idx = start_buffer + byte_idx;
-        for (int bit_idx = 0; bit_idx < 8; bit_idx++) {
-            IEC_BOOL *ptr = buffer[plc_idx][bit_idx];
-            if (ptr != NULL) {
-                *ptr = (byte_val >> bit_idx) & 0x01;
-            }
-        }
+        case BUFFER_TYPE_BOOL_INPUT:  return 0;
+        case BUFFER_TYPE_BOOL_OUTPUT: return 1;
+        case BUFFER_TYPE_BOOL_MEMORY: return 2;
+        case BUFFER_TYPE_INT_INPUT:   return 5;
+        case BUFFER_TYPE_INT_OUTPUT:  return 6;
+        case BUFFER_TYPE_INT_MEMORY:  return 7;
+        case BUFFER_TYPE_DINT_INPUT:  return 8;
+        case BUFFER_TYPE_DINT_OUTPUT: return 9;
+        case BUFFER_TYPE_DINT_MEMORY: return 10;
+        case BUFFER_TYPE_LINT_INPUT:  return 11;
+        case BUFFER_TYPE_LINT_OUTPUT: return 12;
+        case BUFFER_TYPE_LINT_MEMORY: return 13;
+        default:                      return -1;
     }
 }
 
 /**
- * @brief Sync OpenPLC bool buffer to shadow
+ * @brief Find DB runtime structure by DB number
  */
-static void sync_openplc_bool_to_shadow(uint8_t *shadow, int size, s7comm_buffer_type_t type, int start_buffer)
+static s7comm_db_runtime_t* find_db_runtime(int db_number)
+{
+    for (int i = 0; i < g_num_db_runtime; i++) {
+        if (g_db_runtime[i].db_number == db_number) {
+            return &g_db_runtime[i];
+        }
+    }
+    return NULL;
+}
+
+/**
+ * @brief Find system area runtime structure by S7 protocol area code
+ *
+ * Note: The callback receives S7 protocol area codes (S7AreaPE=0x81, S7AreaPA=0x82, etc.)
+ * not server area codes (srvAreaPE=0, srvAreaPA=1, etc.)
+ */
+static s7comm_area_runtime_t* find_area_runtime(int area)
+{
+    switch (area) {
+        case S7AreaPE:
+            return g_pe_runtime.enabled ? &g_pe_runtime : NULL;
+        case S7AreaPA:
+            return g_pa_runtime.enabled ? &g_pa_runtime : NULL;
+        case S7AreaMK:
+            return g_mk_runtime.enabled ? &g_mk_runtime : NULL;
+        default:
+            return NULL;
+    }
+}
+
+/**
+ * @brief Get size of a single element for a buffer type
+ */
+static int get_type_size(s7comm_buffer_type_t type)
+{
+    switch (type) {
+        case BUFFER_TYPE_BOOL_INPUT:
+        case BUFFER_TYPE_BOOL_OUTPUT:
+        case BUFFER_TYPE_BOOL_MEMORY:
+            return 1;  /* 1 byte per bool group */
+
+        case BUFFER_TYPE_INT_INPUT:
+        case BUFFER_TYPE_INT_OUTPUT:
+        case BUFFER_TYPE_INT_MEMORY:
+            return 2;  /* 2 bytes per INT */
+
+        case BUFFER_TYPE_DINT_INPUT:
+        case BUFFER_TYPE_DINT_OUTPUT:
+        case BUFFER_TYPE_DINT_MEMORY:
+            return 4;  /* 4 bytes per DINT */
+
+        case BUFFER_TYPE_LINT_INPUT:
+        case BUFFER_TYPE_LINT_OUTPUT:
+        case BUFFER_TYPE_LINT_MEMORY:
+            return 8;  /* 8 bytes per LINT */
+
+        default:
+            return 1;
+    }
+}
+
+/*
+ * =============================================================================
+ * Read Functions: OpenPLC -> S7 Buffer (for S7 client READs)
+ * These functions copy data from OpenPLC image tables to the S7 buffer.
+ * Called with OpenPLC mutex held.
+ * =============================================================================
+ */
+
+/**
+ * @brief Read OpenPLC bool buffer to destination (mutex must be held)
+ */
+static void read_openplc_bool_to_buffer(uint8_t *dest, int size, s7comm_buffer_type_t type, int start_buffer)
 {
     IEC_BOOL *(*buffer)[8] = NULL;
 
@@ -823,6 +751,10 @@ static void sync_openplc_bool_to_shadow(uint8_t *shadow, int size, s7comm_buffer
             break;
         default:
             return;
+    }
+
+    if (buffer == NULL) {
+        return;
     }
 
     int max_bytes = g_runtime_args.buffer_size - start_buffer;
@@ -837,17 +769,14 @@ static void sync_openplc_bool_to_shadow(uint8_t *shadow, int size, s7comm_buffer
                 byte_val |= (1 << bit_idx);
             }
         }
-        shadow[byte_idx] = byte_val;
+        dest[byte_idx] = byte_val;
     }
 }
 
 /**
- * @brief Sync shadow int buffer to OpenPLC (with endian conversion)
- *
- * Copies S7 client writes to OpenPLC buffers. Used at cycle_start for ALL types.
- * The PLC program and I/O drivers will overwrite values they actively control.
+ * @brief Read OpenPLC int buffer to destination with endian conversion (mutex must be held)
  */
-static void sync_shadow_int_to_openplc(uint8_t *shadow, int size, s7comm_buffer_type_t type, int start_buffer)
+static void read_openplc_int_to_buffer(uint8_t *dest, int size, s7comm_buffer_type_t type, int start_buffer)
 {
     IEC_UINT **buffer = NULL;
 
@@ -865,7 +794,7 @@ static void sync_shadow_int_to_openplc(uint8_t *shadow, int size, s7comm_buffer_
             return;
     }
 
-    uint16_t *shadow_words = (uint16_t *)shadow;
+    uint16_t *s7_words = (uint16_t *)dest;
     int num_words = size / 2;
     int max_words = g_runtime_args.buffer_size - start_buffer;
     if (max_words > num_words) max_words = num_words;
@@ -873,52 +802,15 @@ static void sync_shadow_int_to_openplc(uint8_t *shadow, int size, s7comm_buffer_
     for (int i = 0; i < max_words; i++) {
         IEC_UINT *ptr = buffer[start_buffer + i];
         if (ptr != NULL) {
-            *ptr = swap16(shadow_words[i]);
+            s7_words[i] = swap16(*ptr);
         }
     }
 }
 
 /**
- * @brief Sync OpenPLC int buffer to shadow (with endian conversion)
+ * @brief Read OpenPLC dint buffer to destination with endian conversion (mutex must be held)
  */
-static void sync_openplc_int_to_shadow(uint8_t *shadow, int size, s7comm_buffer_type_t type, int start_buffer)
-{
-    IEC_UINT **buffer = NULL;
-
-    switch (type) {
-        case BUFFER_TYPE_INT_INPUT:
-            buffer = g_runtime_args.int_input;
-            break;
-        case BUFFER_TYPE_INT_OUTPUT:
-            buffer = g_runtime_args.int_output;
-            break;
-        case BUFFER_TYPE_INT_MEMORY:
-            buffer = g_runtime_args.int_memory;
-            break;
-        default:
-            return;
-    }
-
-    uint16_t *shadow_words = (uint16_t *)shadow;
-    int num_words = size / 2;
-    int max_words = g_runtime_args.buffer_size - start_buffer;
-    if (max_words > num_words) max_words = num_words;
-
-    for (int i = 0; i < max_words; i++) {
-        IEC_UINT *ptr = buffer[start_buffer + i];
-        if (ptr != NULL) {
-            shadow_words[i] = swap16(*ptr);
-        }
-    }
-}
-
-/**
- * @brief Sync shadow dint buffer to OpenPLC (with endian conversion)
- *
- * Copies S7 client writes to OpenPLC buffers. Used at cycle_start for ALL types.
- * The PLC program and I/O drivers will overwrite values they actively control.
- */
-static void sync_shadow_dint_to_openplc(uint8_t *shadow, int size, s7comm_buffer_type_t type, int start_buffer)
+static void read_openplc_dint_to_buffer(uint8_t *dest, int size, s7comm_buffer_type_t type, int start_buffer)
 {
     IEC_UDINT **buffer = NULL;
 
@@ -936,7 +828,7 @@ static void sync_shadow_dint_to_openplc(uint8_t *shadow, int size, s7comm_buffer
             return;
     }
 
-    uint32_t *shadow_dwords = (uint32_t *)shadow;
+    uint32_t *s7_dwords = (uint32_t *)dest;
     int num_dwords = size / 4;
     int max_dwords = g_runtime_args.buffer_size - start_buffer;
     if (max_dwords > num_dwords) max_dwords = num_dwords;
@@ -944,52 +836,15 @@ static void sync_shadow_dint_to_openplc(uint8_t *shadow, int size, s7comm_buffer
     for (int i = 0; i < max_dwords; i++) {
         IEC_UDINT *ptr = buffer[start_buffer + i];
         if (ptr != NULL) {
-            *ptr = swap32(shadow_dwords[i]);
+            s7_dwords[i] = swap32(*ptr);
         }
     }
 }
 
 /**
- * @brief Sync OpenPLC dint buffer to shadow (with endian conversion)
+ * @brief Read OpenPLC lint buffer to destination with endian conversion (mutex must be held)
  */
-static void sync_openplc_dint_to_shadow(uint8_t *shadow, int size, s7comm_buffer_type_t type, int start_buffer)
-{
-    IEC_UDINT **buffer = NULL;
-
-    switch (type) {
-        case BUFFER_TYPE_DINT_INPUT:
-            buffer = g_runtime_args.dint_input;
-            break;
-        case BUFFER_TYPE_DINT_OUTPUT:
-            buffer = g_runtime_args.dint_output;
-            break;
-        case BUFFER_TYPE_DINT_MEMORY:
-            buffer = g_runtime_args.dint_memory;
-            break;
-        default:
-            return;
-    }
-
-    uint32_t *shadow_dwords = (uint32_t *)shadow;
-    int num_dwords = size / 4;
-    int max_dwords = g_runtime_args.buffer_size - start_buffer;
-    if (max_dwords > num_dwords) max_dwords = num_dwords;
-
-    for (int i = 0; i < max_dwords; i++) {
-        IEC_UDINT *ptr = buffer[start_buffer + i];
-        if (ptr != NULL) {
-            shadow_dwords[i] = swap32(*ptr);
-        }
-    }
-}
-
-/**
- * @brief Sync shadow lint buffer to OpenPLC (with endian conversion)
- *
- * Copies S7 client writes to OpenPLC buffers. Used at cycle_start for ALL types.
- * The PLC program and I/O drivers will overwrite values they actively control.
- */
-static void sync_shadow_lint_to_openplc(uint8_t *shadow, int size, s7comm_buffer_type_t type, int start_buffer)
+static void read_openplc_lint_to_buffer(uint8_t *dest, int size, s7comm_buffer_type_t type, int start_buffer)
 {
     IEC_ULINT **buffer = NULL;
 
@@ -1007,7 +862,7 @@ static void sync_shadow_lint_to_openplc(uint8_t *shadow, int size, s7comm_buffer
             return;
     }
 
-    uint64_t *shadow_lwords = (uint64_t *)shadow;
+    uint64_t *s7_lwords = (uint64_t *)dest;
     int num_lwords = size / 8;
     int max_lwords = g_runtime_args.buffer_size - start_buffer;
     if (max_lwords > num_lwords) max_lwords = num_lwords;
@@ -1015,114 +870,236 @@ static void sync_shadow_lint_to_openplc(uint8_t *shadow, int size, s7comm_buffer
     for (int i = 0; i < max_lwords; i++) {
         IEC_ULINT *ptr = buffer[start_buffer + i];
         if (ptr != NULL) {
-            *ptr = swap64(shadow_lwords[i]);
+            s7_lwords[i] = swap64(*ptr);
         }
     }
 }
 
 /**
- * @brief Sync OpenPLC lint buffer to shadow (with endian conversion)
+ * @brief Dispatch read from OpenPLC to buffer based on buffer type
  */
-static void sync_openplc_lint_to_shadow(uint8_t *shadow, int size, s7comm_buffer_type_t type, int start_buffer)
+static void read_openplc_to_buffer(uint8_t *dest, int size, s7comm_buffer_type_t type, int start_buffer)
 {
-    IEC_ULINT **buffer = NULL;
-
     switch (type) {
+        case BUFFER_TYPE_BOOL_INPUT:
+        case BUFFER_TYPE_BOOL_OUTPUT:
+        case BUFFER_TYPE_BOOL_MEMORY:
+            read_openplc_bool_to_buffer(dest, size, type, start_buffer);
+            break;
+
+        case BUFFER_TYPE_INT_INPUT:
+        case BUFFER_TYPE_INT_OUTPUT:
+        case BUFFER_TYPE_INT_MEMORY:
+            read_openplc_int_to_buffer(dest, size, type, start_buffer);
+            break;
+
+        case BUFFER_TYPE_DINT_INPUT:
+        case BUFFER_TYPE_DINT_OUTPUT:
+        case BUFFER_TYPE_DINT_MEMORY:
+            read_openplc_dint_to_buffer(dest, size, type, start_buffer);
+            break;
+
         case BUFFER_TYPE_LINT_INPUT:
-            buffer = g_runtime_args.lint_input;
-            break;
         case BUFFER_TYPE_LINT_OUTPUT:
-            buffer = g_runtime_args.lint_output;
-            break;
         case BUFFER_TYPE_LINT_MEMORY:
-            buffer = g_runtime_args.lint_memory;
+            read_openplc_lint_to_buffer(dest, size, type, start_buffer);
             break;
+
         default:
-            return;
+            break;
     }
+}
 
-    uint64_t *shadow_lwords = (uint64_t *)shadow;
-    int num_lwords = size / 8;
-    int max_lwords = g_runtime_args.buffer_size - start_buffer;
-    if (max_lwords > num_lwords) max_lwords = num_lwords;
+/*
+ * =============================================================================
+ * Write Functions: S7 Buffer -> OpenPLC via Journal (for S7 client WRITEs)
+ * These functions write data from S7 buffer to OpenPLC via journal.
+ * No mutex needed - journal writes are thread-safe.
+ * =============================================================================
+ */
 
-    for (int i = 0; i < max_lwords; i++) {
-        IEC_ULINT *ptr = buffer[start_buffer + i];
-        if (ptr != NULL) {
-            shadow_lwords[i] = swap64(*ptr);
+/**
+ * @brief Write bool buffer to OpenPLC via journal
+ */
+static void write_bool_to_openplc_journal(uint8_t *src, int size, s7comm_buffer_type_t type, int start_buffer)
+{
+    int journal_type = map_to_journal_type(type);
+    if (journal_type < 0) return;
+
+    int max_bytes = g_runtime_args.buffer_size - start_buffer;
+    if (max_bytes > size) max_bytes = size;
+
+    for (int byte_idx = 0; byte_idx < max_bytes; byte_idx++) {
+        uint8_t byte_val = src[byte_idx];
+        int plc_idx = start_buffer + byte_idx;
+        for (int bit_idx = 0; bit_idx < 8; bit_idx++) {
+            int bit_val = (byte_val >> bit_idx) & 0x01;
+            g_runtime_args.journal_write_bool(journal_type, plc_idx, bit_idx, bit_val);
         }
     }
 }
 
 /**
- * @brief Dispatch sync from shadow to OpenPLC based on buffer type
+ * @brief Write int buffer to OpenPLC via journal with endian conversion
+ */
+static void write_int_to_openplc_journal(uint8_t *src, int size, s7comm_buffer_type_t type, int start_buffer)
+{
+    int journal_type = map_to_journal_type(type);
+    if (journal_type < 0) return;
+
+    uint16_t *s7_words = (uint16_t *)src;
+    int num_words = size / 2;
+    int max_words = g_runtime_args.buffer_size - start_buffer;
+    if (max_words > num_words) max_words = num_words;
+
+    for (int i = 0; i < max_words; i++) {
+        uint16_t value = swap16(s7_words[i]);
+        g_runtime_args.journal_write_int(journal_type, start_buffer + i, value);
+    }
+}
+
+/**
+ * @brief Write dint buffer to OpenPLC via journal with endian conversion
+ */
+static void write_dint_to_openplc_journal(uint8_t *src, int size, s7comm_buffer_type_t type, int start_buffer)
+{
+    int journal_type = map_to_journal_type(type);
+    if (journal_type < 0) return;
+
+    uint32_t *s7_dwords = (uint32_t *)src;
+    int num_dwords = size / 4;
+    int max_dwords = g_runtime_args.buffer_size - start_buffer;
+    if (max_dwords > num_dwords) max_dwords = num_dwords;
+
+    for (int i = 0; i < max_dwords; i++) {
+        uint32_t value = swap32(s7_dwords[i]);
+        g_runtime_args.journal_write_dint(journal_type, start_buffer + i, value);
+    }
+}
+
+/**
+ * @brief Write lint buffer to OpenPLC via journal with endian conversion
+ */
+static void write_lint_to_openplc_journal(uint8_t *src, int size, s7comm_buffer_type_t type, int start_buffer)
+{
+    int journal_type = map_to_journal_type(type);
+    if (journal_type < 0) return;
+
+    uint64_t *s7_lwords = (uint64_t *)src;
+    int num_lwords = size / 8;
+    int max_lwords = g_runtime_args.buffer_size - start_buffer;
+    if (max_lwords > num_lwords) max_lwords = num_lwords;
+
+    for (int i = 0; i < max_lwords; i++) {
+        uint64_t value = swap64(s7_lwords[i]);
+        g_runtime_args.journal_write_lint(journal_type, start_buffer + i, value);
+    }
+}
+
+/**
+ * @brief Dispatch write from buffer to OpenPLC journal based on buffer type
+ */
+static void write_buffer_to_openplc_journal(uint8_t *src, int size, s7comm_buffer_type_t type, int start_buffer)
+{
+    switch (type) {
+        case BUFFER_TYPE_BOOL_INPUT:
+        case BUFFER_TYPE_BOOL_OUTPUT:
+        case BUFFER_TYPE_BOOL_MEMORY:
+            write_bool_to_openplc_journal(src, size, type, start_buffer);
+            break;
+
+        case BUFFER_TYPE_INT_INPUT:
+        case BUFFER_TYPE_INT_OUTPUT:
+        case BUFFER_TYPE_INT_MEMORY:
+            write_int_to_openplc_journal(src, size, type, start_buffer);
+            break;
+
+        case BUFFER_TYPE_DINT_INPUT:
+        case BUFFER_TYPE_DINT_OUTPUT:
+        case BUFFER_TYPE_DINT_MEMORY:
+            write_dint_to_openplc_journal(src, size, type, start_buffer);
+            break;
+
+        case BUFFER_TYPE_LINT_INPUT:
+        case BUFFER_TYPE_LINT_OUTPUT:
+        case BUFFER_TYPE_LINT_MEMORY:
+            write_lint_to_openplc_journal(src, size, type, start_buffer);
+            break;
+
+        default:
+            break;
+    }
+}
+
+/*
+ * =============================================================================
+ * Snap7 RWArea Callback - On-Demand Data Synchronization
+ * =============================================================================
+ */
+
+/**
+ * @brief Snap7 RWArea callback for on-demand data synchronization
  *
- * Used by cycle_start() for ALL types. Copies S7 client writes to OpenPLC buffers.
- * Values driven by the PLC program or I/O drivers will be overwritten during the scan cycle.
+ * Called by Snap7 when an S7 client reads or writes data.
+ * - On READ: Acquire OpenPLC mutex, copy fresh data to S7 buffer, release mutex
+ * - On WRITE: Use journal writes (thread-safe, no mutex needed)
+ *
+ * @param usrPtr User pointer (unused)
+ * @param Sender Client identifier
+ * @param Operation OperationRead or OperationWrite
+ * @param PTag S7 tag with Area, DBNumber, Start, Size
+ * @param pUsrData Pointer to data buffer
+ * @return 0 to accept operation, non-zero to reject
  */
-static void sync_shadow_to_openplc_by_type(uint8_t *shadow, int size, s7comm_buffer_type_t type, int start_buffer)
+static int s7comm_rw_area_callback(void *usrPtr, int Sender, int Operation, PS7Tag PTag, void *pUsrData)
 {
-    switch (type) {
-        case BUFFER_TYPE_BOOL_INPUT:
-        case BUFFER_TYPE_BOOL_OUTPUT:
-        case BUFFER_TYPE_BOOL_MEMORY:
-            sync_shadow_bool_to_openplc(shadow, size, type, start_buffer);
-            break;
+    (void)usrPtr;
+    (void)Sender;
 
-        case BUFFER_TYPE_INT_INPUT:
-        case BUFFER_TYPE_INT_OUTPUT:
-        case BUFFER_TYPE_INT_MEMORY:
-            sync_shadow_int_to_openplc(shadow, size, type, start_buffer);
-            break;
-
-        case BUFFER_TYPE_DINT_INPUT:
-        case BUFFER_TYPE_DINT_OUTPUT:
-        case BUFFER_TYPE_DINT_MEMORY:
-            sync_shadow_dint_to_openplc(shadow, size, type, start_buffer);
-            break;
-
-        case BUFFER_TYPE_LINT_INPUT:
-        case BUFFER_TYPE_LINT_OUTPUT:
-        case BUFFER_TYPE_LINT_MEMORY:
-            sync_shadow_lint_to_openplc(shadow, size, type, start_buffer);
-            break;
-
-        default:
-            break;
+    if (pUsrData == NULL || PTag == NULL) {
+        return -1;
     }
-}
 
-/**
- * @brief Dispatch sync from OpenPLC to shadow based on buffer type
- */
-static void sync_openplc_to_shadow_by_type(uint8_t *shadow, int size, s7comm_buffer_type_t type, int start_buffer)
-{
-    switch (type) {
-        case BUFFER_TYPE_BOOL_INPUT:
-        case BUFFER_TYPE_BOOL_OUTPUT:
-        case BUFFER_TYPE_BOOL_MEMORY:
-            sync_openplc_bool_to_shadow(shadow, size, type, start_buffer);
-            break;
+    s7comm_buffer_type_t type;
+    int start_buffer;
+    int size = PTag->Size;
 
-        case BUFFER_TYPE_INT_INPUT:
-        case BUFFER_TYPE_INT_OUTPUT:
-        case BUFFER_TYPE_INT_MEMORY:
-            sync_openplc_int_to_shadow(shadow, size, type, start_buffer);
-            break;
-
-        case BUFFER_TYPE_DINT_INPUT:
-        case BUFFER_TYPE_DINT_OUTPUT:
-        case BUFFER_TYPE_DINT_MEMORY:
-            sync_openplc_dint_to_shadow(shadow, size, type, start_buffer);
-            break;
-
-        case BUFFER_TYPE_LINT_INPUT:
-        case BUFFER_TYPE_LINT_OUTPUT:
-        case BUFFER_TYPE_LINT_MEMORY:
-            sync_openplc_lint_to_shadow(shadow, size, type, start_buffer);
-            break;
-
-        default:
-            break;
+    /* Determine mapping based on S7 protocol area code */
+    if (PTag->Area == S7AreaDB) {
+        /* Data block - look up configuration */
+        s7comm_db_runtime_t *db = find_db_runtime(PTag->DBNumber);
+        if (db == NULL) {
+            /* DB not configured - return zeros for read, ignore write */
+            return 0;
+        }
+        type = db->type;
+        start_buffer = db->start_buffer + (PTag->Start / get_type_size(type));
+    } else {
+        /* System area (PE, PA, MK) */
+        s7comm_area_runtime_t *area = find_area_runtime(PTag->Area);
+        if (area == NULL) {
+            /* Area not configured - return zeros for read, ignore write */
+            return 0;
+        }
+        type = area->type;
+        start_buffer = area->start_buffer + (PTag->Start / get_type_size(type));
     }
+
+    if (Operation == OperationRead) {
+        /*
+         * S7 client is READing - provide fresh data from OpenPLC
+         * Acquire mutex, copy data, release mutex
+         */
+        g_runtime_args.mutex_take(g_runtime_args.buffer_mutex);
+        read_openplc_to_buffer((uint8_t *)pUsrData, size, type, start_buffer);
+        g_runtime_args.mutex_give(g_runtime_args.buffer_mutex);
+    } else if (Operation == OperationWrite) {
+        /*
+         * S7 client is WRITing - journal the changes
+         * Journal writes are thread-safe, no mutex needed
+         */
+        write_buffer_to_openplc_journal((uint8_t *)pUsrData, size, type, start_buffer);
+    }
+
+    return 0;  /* Accept operation */
 }
