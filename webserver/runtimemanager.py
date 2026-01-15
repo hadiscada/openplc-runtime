@@ -244,6 +244,7 @@ class RuntimeManager:
         Send START command
         """
         try:
+            self._manage_canbus(action="start")
             return self.runtime_socket.send_and_receive("START\n")
         except (OSError, socket.error) as e:
             logger.error("Failed to start PLC runtime: %s", e)
@@ -257,6 +258,7 @@ class RuntimeManager:
         Send STOP command
         """
         try:
+            self._manage_canbus(action="stop")
             return self.runtime_socket.send_and_receive("STOP\n")
         except (OSError, socket.error) as e:
             logger.error("Failed to stop PLC runtime: %s", e)
@@ -290,3 +292,50 @@ class RuntimeManager:
         except Exception as e:
             logger.error("Failed to get PLC stats (unexpected): %s", e)
             return None
+
+
+    def _manage_canbus(self, action="start"):
+        """
+        Membaca konfigurasi CANbus dan mengonfigurasi interface sistem
+        """
+        #can_conf_path = os.path.join(os.path.dirname(self.runtime_path), "generated", "conf", "canbus_conf.json")
+        can_conf_path = "/root/openplc-runtime/core/generated/conf/canbus_conf.json"
+        interface = "can0"
+        
+        if not os.path.exists(can_conf_path):
+            logger.info("CANbus: No config file found at %s", can_conf_path)
+            return
+
+        try:
+            import json
+            with open(can_conf_path, 'r') as f:
+                config = json.load(f)
+            
+            enabled = config.get("canbus_enabled") == "true"
+            bitrate = config.get("bitrate", 1000000)
+
+            if action == "start" and enabled:
+                logger.info("CANbus: Enabling %s at %d bps", interface, bitrate)
+                # Down dulu untuk reset
+                subprocess.run(["ip", "link", "set", interface, "down"], stderr=subprocess.DEVNULL)
+                time.sleep(0.5)
+                # Set bitrate dan Up
+                result = subprocess.run([
+                    "ip", "link", "set", interface, "type", "can", 
+                    "bitrate", str(bitrate), "restart-ms", "100"
+                ], capture_output=True)
+                
+                if result.returncode == 0:
+                    subprocess.run(["ip", "link", "set", interface, "up"])
+                    # Kirim NMT Start (Opsional: membutuhkan can-utils)
+                    subprocess.run(["cansend", interface, "000#0100"], stderr=subprocess.DEVNULL)
+                    logger.info("CANbus: Interface %s is ACTIVE", interface)
+                else:
+                    logger.error("CANbus: Failed to set bitrate: %s", result.stderr.decode())
+
+            elif action == "stop" or not enabled:
+                logger.info("CANbus: Disabling %s", interface)
+                subprocess.run(["ip", "link", "set", interface, "down"], stderr=subprocess.DEVNULL)
+
+        except Exception as e:
+            logger.error("CANbus: Error managing interface: %s", e)

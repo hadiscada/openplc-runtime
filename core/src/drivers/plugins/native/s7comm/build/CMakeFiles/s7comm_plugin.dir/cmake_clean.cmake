@@ -1,0 +1,41 @@
+file(REMOVE_RECURSE
+  "CMakeFiles/s7comm_plugin.dir/cjson/cJSON.c.o"
+  "CMakeFiles/s7comm_plugin.dir/cjson/cJSON.c.o.d"
+  "CMakeFiles/s7comm_plugin.dir/root/openplc-runtime/core/src/drivers/plugins/native/plugin_logger.c.o"
+  "CMakeFiles/s7comm_plugin.dir/root/openplc-runtime/core/src/drivers/plugins/native/plugin_logger.c.o.d"
+  "CMakeFiles/s7comm_plugin.dir/s7comm_config.c.o"
+  "CMakeFiles/s7comm_plugin.dir/s7comm_config.c.o.d"
+  "CMakeFiles/s7comm_plugin.dir/s7comm_plugin.cpp.o"
+  "CMakeFiles/s7comm_plugin.dir/s7comm_plugin.cpp.o.d"
+  "CMakeFiles/s7comm_plugin.dir/snap7/core/s7_client.cpp.o"
+  "CMakeFiles/s7comm_plugin.dir/snap7/core/s7_client.cpp.o.d"
+  "CMakeFiles/s7comm_plugin.dir/snap7/core/s7_isotcp.cpp.o"
+  "CMakeFiles/s7comm_plugin.dir/snap7/core/s7_isotcp.cpp.o.d"
+  "CMakeFiles/s7comm_plugin.dir/snap7/core/s7_micro_client.cpp.o"
+  "CMakeFiles/s7comm_plugin.dir/snap7/core/s7_micro_client.cpp.o.d"
+  "CMakeFiles/s7comm_plugin.dir/snap7/core/s7_partner.cpp.o"
+  "CMakeFiles/s7comm_plugin.dir/snap7/core/s7_partner.cpp.o.d"
+  "CMakeFiles/s7comm_plugin.dir/snap7/core/s7_peer.cpp.o"
+  "CMakeFiles/s7comm_plugin.dir/snap7/core/s7_peer.cpp.o.d"
+  "CMakeFiles/s7comm_plugin.dir/snap7/core/s7_server.cpp.o"
+  "CMakeFiles/s7comm_plugin.dir/snap7/core/s7_server.cpp.o.d"
+  "CMakeFiles/s7comm_plugin.dir/snap7/core/s7_text.cpp.o"
+  "CMakeFiles/s7comm_plugin.dir/snap7/core/s7_text.cpp.o.d"
+  "CMakeFiles/s7comm_plugin.dir/snap7/lib/snap7_libmain.cpp.o"
+  "CMakeFiles/s7comm_plugin.dir/snap7/lib/snap7_libmain.cpp.o.d"
+  "CMakeFiles/s7comm_plugin.dir/snap7/sys/snap_msgsock.cpp.o"
+  "CMakeFiles/s7comm_plugin.dir/snap7/sys/snap_msgsock.cpp.o.d"
+  "CMakeFiles/s7comm_plugin.dir/snap7/sys/snap_sysutils.cpp.o"
+  "CMakeFiles/s7comm_plugin.dir/snap7/sys/snap_sysutils.cpp.o.d"
+  "CMakeFiles/s7comm_plugin.dir/snap7/sys/snap_tcpsrvr.cpp.o"
+  "CMakeFiles/s7comm_plugin.dir/snap7/sys/snap_tcpsrvr.cpp.o.d"
+  "CMakeFiles/s7comm_plugin.dir/snap7/sys/snap_threads.cpp.o"
+  "CMakeFiles/s7comm_plugin.dir/snap7/sys/snap_threads.cpp.o.d"
+  "plugins/libs7comm_plugin.pdb"
+  "plugins/libs7comm_plugin.so"
+)
+
+# Per-language clean rules from dependency scanning.
+foreach(lang C CXX)
+  include(CMakeFiles/s7comm_plugin.dir/cmake_clean_${lang}.cmake OPTIONAL)
+endforeach()

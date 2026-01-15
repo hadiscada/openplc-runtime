@@ -130,6 +130,118 @@ def handle_ping(data: dict) -> dict:
     return {"status": response}
 
 
+def handle_scan_canbus(data: dict) -> dict:
+    result = scan_canbus()
+    return {
+        "status": "success", 
+        "found_devices_count": len(result), 
+        "devices": result
+    }
+
+
+def scan_canbus():
+    if can is None:
+        return {"error": "Library python-can is not installed"}
+    
+    # Cek apakah interface down, jika ya, nyalakan sebentar
+    interface_was_down = False
+    import subprocess
+    status = subprocess.getoutput("ip link show can0")
+    if "DOWN" in status or "not found" in status:
+        interface_was_down = True
+        os.system("ip link set can0 type can bitrate 1000000 && ip link set can0 up")
+        time.sleep(1)
+
+
+    devices = []
+    # Batasi limit scan untuk kecepatan (biasanya ID 1-32 sudah cukup untuk I/O)
+    SCAN_LIMIT = 33 
+    
+    try:
+        # Gunakan timeout dasar 0.03s untuk keseimbangan kecepatan & reliabilitas
+        bus = can.interface.Bus(channel='can0', bustype='socketcan', timeout=0.03, receive_own_messages=False)
+        
+        for node_id in range(1, SCAN_LIMIT):
+            # --- FASE 1: DETEKSI CEPAT (DOUBLE-CHECK) ---
+            # Reset filter ke mode terbuka agar bisa mendeteksi semua balasan
+            bus.set_filters([]) 
+            node_found = False
+            
+            # Coba 2 kali untuk memastikan node tidak terlewat karena tabrakan data
+            for attempt in range(2):
+                # Bersihkan sisa pesan di buffer (Flush)
+                while bus.recv(0.001): pass 
+                
+                # SDO Read Index 0x1000 (Device Type)
+                sdo_detect = can.Message(
+                    arbitration_id=0x600 + node_id,
+                    data=[0x40, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00],
+                    is_extended_id=False
+                )
+                bus.send(sdo_detect)
+                
+                # Tunggu balasan SDO (0x580 + NodeID)
+                reply = bus.recv(0.04) 
+                
+                if reply and reply.arbitration_id == (0x580 + node_id):
+                    node_found = True
+                    break
+                
+                # Jeda sangat singkat sebelum coba lagi
+                time.sleep(0.01)
+
+            # --- FASE 2: WAWANCARA DETAIL (Hanya jika Node Ditemukan) ---
+            if node_found:
+                # Pasang Hardware Filter khusus ID ini agar pembacaan Vendor/Product 100% stabil
+                # Kernel Linux hanya akan meloloskan ID balasan dari node ini
+                bus.set_filters([{"can_id": 0x580 + node_id, "can_mask": 0x7FF, "extended": False}])
+                time.sleep(0.01) # Jeda sinkronisasi filter
+                
+                vendor_id = "Unknown"
+                product_code = "Unknown"
+
+                # Ambil Vendor ID (Index 0x1018 Sub 1)
+                bus.send(can.Message(arbitration_id=0x600 + node_id,
+                                     data=[0x40, 0x18, 0x10, 0x01, 0x00, 0x00, 0x00, 0x00],
+                                     is_extended_id=False))
+                v_reply = bus.recv(0.05)
+                if v_reply:
+                    v_val = int.from_bytes(v_reply.data[4:], 'little')
+                    vendor_id = hex(v_val)
+
+                # Ambil Product Code (Index 0x1018 Sub 2)
+                bus.send(can.Message(arbitration_id=0x600 + node_id,
+                                     data=[0x40, 0x18, 0x10, 0x02, 0x00, 0x00, 0x00, 0x00],
+                                     is_extended_id=False))
+                p_reply = bus.recv(0.05)
+                if p_reply:
+                    p_val = int.from_bytes(p_reply.data[4:], 'little')
+                    product_code = hex(p_val)
+
+                # Tambahkan ke hasil list
+                devices.append({
+                    "node_id": node_id,
+                    "hex_id": hex(node_id),
+                    "vendor_id": vendor_id,
+                    "product_code": product_code,
+                    "type": "CANopen Device"
+                })
+            
+            # Beri jeda antar node agar tidak membanjiri bus (Bus Flood)
+            time.sleep(0.005)
+            
+        bus.shutdown()
+    except Exception as e:
+        return {"error": str(e)}
+    
+    # Jika tadi kita nyalakan paksa, matikan kembali setelah selesai scan
+    if interface_was_down:
+        os.system("ip link set can0 down")
+
+
+    return devices
+
+
 GET_HANDLERS: dict[str, Callable[[dict], dict]] = {
     "start-plc": handle_start_plc,
     "stop-plc": handle_stop_plc,
@@ -137,6 +249,7 @@ GET_HANDLERS: dict[str, Callable[[dict], dict]] = {
     "compilation-status": handle_compilation_status,
     "status": handle_status,
     "ping": handle_ping,
+    "scan-canbus": handle_scan_canbus,
 }
 
 
